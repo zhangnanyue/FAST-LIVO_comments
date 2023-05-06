@@ -6,6 +6,7 @@ filter_size_surf : 0.15
 filter_size_map : 0.3
 cube_side_length : 20
 debug : 0
+# 网格尺寸大小
 grid_size : 40
 patch_size : 8
 img_enable : 1

@@ -2,641 +2,694 @@
 
 namespace lidar_selection {
 
-LidarSelector::LidarSelector(const int gridsize, SparseMap* sparsemap ): grid_size(gridsize), sparse_map(sparsemap)
-{
-    downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
-    G = Matrix<double, DIM_STATE, DIM_STATE>::Zero();
-    H_T_H = Matrix<double, DIM_STATE, DIM_STATE>::Zero();
-    Rli = M3D::Identity();
-    Rci = M3D::Identity();
-    Rcw = M3D::Identity();
-    Jdphi_dR = M3D::Identity();
-    Jdp_dt = M3D::Identity();
-    Jdp_dR = M3D::Identity();
-    Pli = V3D::Zero();
-    Pci = V3D::Zero();
-    Pcw = V3D::Zero();
-    width = 800;
-    height = 600;
+LidarSelector::LidarSelector(const int gridsize, SparseMap *sparsemap)
+    : grid_size(gridsize), sparse_map(sparsemap) {
+  downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
+  G = Matrix<double, DIM_STATE, DIM_STATE>::Zero();
+  H_T_H = Matrix<double, DIM_STATE, DIM_STATE>::Zero();
+  Rli = M3D::Identity();
+  Rci = M3D::Identity();
+  Rcw = M3D::Identity();
+  Jdphi_dR = M3D::Identity();
+  Jdp_dt = M3D::Identity();
+  Jdp_dR = M3D::Identity();
+  Pli = V3D::Zero();
+  Pci = V3D::Zero();
+  Pcw = V3D::Zero();
+  width = 800;
+  height = 600;
 }
 
-LidarSelector::~LidarSelector() 
-{
-    delete sparse_map;
-    delete sub_sparse_map;
-    delete[] grid_num;
-    delete[] map_index;
-    delete[] map_value;
-    delete[] align_flag;
-    delete[] patch_cache;
-    unordered_map<int, Warp*>().swap(Warp_map);
-    unordered_map<VOXEL_KEY, float>().swap(sub_feat_map);
-    unordered_map<VOXEL_KEY, VOXEL_POINTS*>().swap(feat_map);  
+LidarSelector::~LidarSelector() {
+  delete sparse_map;
+  delete sub_sparse_map;
+  delete[] grid_num;
+  delete[] map_index;
+  delete[] map_value;
+  delete[] align_flag;
+  delete[] patch_cache;
+  unordered_map<int, Warp *>().swap(Warp_map);
+  unordered_map<VOXEL_KEY, float>().swap(sub_feat_map);
+  unordered_map<VOXEL_KEY, VOXEL_POINTS *>().swap(feat_map);
 }
 
-void LidarSelector::set_extrinsic(const V3D &transl, const M3D &rot)
-{
-    Pli = -rot.transpose() * transl;
-    Rli = rot.transpose();
+void LidarSelector::set_extrinsic(const V3D &transl, const M3D &rot) {
+  Pli = -rot.transpose() * transl;
+  Rli = rot.transpose();
 }
 
-void LidarSelector::init()
-{
-    sub_sparse_map = new SubSparseMap;
-    Rci = sparse_map->Rcl * Rli;
-    Pci= sparse_map->Rcl*Pli + sparse_map->Pcl;
-    M3D Ric;
-    V3D Pic;
-    Jdphi_dR = Rci;
-    Pic = -Rci.transpose() * Pci;
-    M3D tmp;
-    tmp << SKEW_SYM_MATRX(Pic);
-    Jdp_dR = -Rci * tmp;
-    width = cam->width();
-    height = cam->height();
-    grid_n_width = static_cast<int>(width/grid_size);
-    grid_n_height = static_cast<int>(height/grid_size);
-    length = grid_n_width * grid_n_height;
-    fx = cam->errorMultiplier2();
-    fy = cam->errorMultiplier() / (4. * fx);
-    grid_num = new int[length];
-    map_index = new int[length];
-    map_value = new float[length];
-    align_flag = new int[length];
-    map_dist = (float*)malloc(sizeof(float)*length);
-    memset(grid_num, TYPE_UNKNOWN, sizeof(int)*length);
-    memset(map_index, 0, sizeof(int)*length);
-    memset(map_value, 0, sizeof(float)*length);
-    voxel_points_.reserve(length);
-    add_voxel_points_.reserve(length);
-    count_img = 0;
-    patch_size_total = patch_size * patch_size;
-    patch_size_half = static_cast<int>(patch_size/2);
-    patch_cache = new float[patch_size_total];
-    stage_ = STAGE_FIRST_FRAME;
-    pg_down.reset(new PointCloudXYZI());
-    Map_points.reset(new PointCloudXYZI());
-    Map_points_output.reset(new PointCloudXYZI());
-    weight_scale_ = 10;
-    weight_function_.reset(new vk::robust_cost::HuberWeightFunction());
-    // weight_function_.reset(new vk::robust_cost::TukeyWeightFunction());
-    scale_estimator_.reset(new vk::robust_cost::UnitScaleEstimator());
-    // scale_estimator_.reset(new vk::robust_cost::MADScaleEstimator());
+void LidarSelector::init() {
+  sub_sparse_map = new SubSparseMap;
+  Rci = sparse_map->Rcl * Rli;
+  Pci = sparse_map->Rcl * Pli + sparse_map->Pcl;
+  M3D Ric;
+  V3D Pic;
+  Jdphi_dR = Rci;
+  Pic = -Rci.transpose() * Pci;
+  M3D tmp;
+  tmp << SKEW_SYM_MATRX(Pic);
+  Jdp_dR = -Rci * tmp;
+  width = cam->width();
+  height = cam->height();
+  // 宽度上的网格数量
+  grid_n_width = static_cast<int>(width / grid_size);
+  // 高上的网格数量
+  grid_n_height = static_cast<int>(height / grid_size);
+  length = grid_n_width * grid_n_height;
+  fx = cam->errorMultiplier2();
+  fy = cam->errorMultiplier() / (4. * fx);
+  grid_num = new int[length];
+  map_index = new int[length];
+  map_value = new float[length];
+  align_flag = new int[length];
+  map_dist = (float *)malloc(sizeof(float) * length);
+  memset(grid_num, TYPE_UNKNOWN, sizeof(int) * length);
+  memset(map_index, 0, sizeof(int) * length);
+  memset(map_value, 0, sizeof(float) * length);
+  voxel_points_.reserve(length);
+  add_voxel_points_.reserve(length);
+  count_img = 0;
+  patch_size_total = patch_size * patch_size;
+  patch_size_half = static_cast<int>(patch_size / 2);
+  patch_cache = new float[patch_size_total];
+  stage_ = STAGE_FIRST_FRAME;
+  pg_down.reset(new PointCloudXYZI());
+  Map_points.reset(new PointCloudXYZI());
+  Map_points_output.reset(new PointCloudXYZI());
+  weight_scale_ = 10;
+  weight_function_.reset(new vk::robust_cost::HuberWeightFunction());
+  // weight_function_.reset(new vk::robust_cost::TukeyWeightFunction());
+  scale_estimator_.reset(new vk::robust_cost::UnitScaleEstimator());
+  // scale_estimator_.reset(new vk::robust_cost::MADScaleEstimator());
+}
+// 重置grid，包括：
+// grid_num：二维网格
+// map_index：网格id
+// map_dist：网格中深度最近的点的深度
+// 使用swap清空voxel_points_和add_voxel_points_内存内容，但是仍然保留内存
+void LidarSelector::reset_grid() {
+  memset(grid_num, TYPE_UNKNOWN, sizeof(int) * length);
+  memset(map_index, 0, sizeof(int) * length);
+  fill_n(map_dist, length, 10000);
+  //使用用swap函数，对vector里面的内容进行清空，但是vector占用的仍然是原来的内存，并不需要重新分配内存
+  std::vector<PointPtr>(length).swap(voxel_points_);
+  std::vector<V3D>(length).swap(add_voxel_points_);
+  voxel_points_.reserve(length);
+  add_voxel_points_.reserve(length);
 }
 
-void LidarSelector::reset_grid()
-{
-    memset(grid_num, TYPE_UNKNOWN, sizeof(int)*length);
-    memset(map_index, 0, sizeof(int)*length);
-    fill_n(map_dist, length, 10000);
-    std::vector<PointPtr>(length).swap(voxel_points_);
-    std::vector<V3D>(length).swap(add_voxel_points_);
-    voxel_points_.reserve(length);
-    add_voxel_points_.reserve(length);
+void LidarSelector::dpi(V3D p, MD(2, 3) & J) {
+  const double x = p[0];
+  const double y = p[1];
+  const double z_inv = 1. / p[2];
+  const double z_inv_2 = z_inv * z_inv;
+  J(0, 0) = fx * z_inv;
+  J(0, 1) = 0.0;
+  J(0, 2) = -fx * x * z_inv_2;
+  J(1, 0) = 0.0;
+  J(1, 1) = fy * z_inv;
+  J(1, 2) = -fy * y * z_inv_2;
 }
 
-void LidarSelector::dpi(V3D p, MD(2,3)& J) {
-    const double x = p[0];
-    const double y = p[1];
-    const double z_inv = 1./p[2];
-    const double z_inv_2 = z_inv * z_inv;
-    J(0,0) = fx * z_inv;
-    J(0,1) = 0.0;
-    J(0,2) = -fx * x * z_inv_2;
-    J(1,0) = 0.0;
-    J(1,1) = fy * z_inv;
-    J(1,2) = -fy * y * z_inv_2;
+float LidarSelector::CheckGoodPoints(cv::Mat img, V2D uv) {
+  const float u_ref = uv[0];
+  const float v_ref = uv[1];
+  const int u_ref_i = floorf(uv[0]);
+  const int v_ref_i = floorf(uv[1]);
+  const float subpix_u_ref = u_ref - u_ref_i;
+  const float subpix_v_ref = v_ref - v_ref_i;
+  uint8_t *img_ptr = (uint8_t *)img.data + (v_ref_i)*width + (u_ref_i);
+  float gu = 2 * (img_ptr[1] - img_ptr[-1]) + img_ptr[1 - width] -
+             img_ptr[-1 - width] + img_ptr[1 + width] - img_ptr[-1 + width];
+  float gv = 2 * (img_ptr[width] - img_ptr[-width]) + img_ptr[width + 1] -
+             img_ptr[-width + 1] + img_ptr[width - 1] - img_ptr[-width - 1];
+  return fabs(gu) + fabs(gv);
 }
 
-float LidarSelector::CheckGoodPoints(cv::Mat img, V2D uv)
-{
-    const float u_ref = uv[0];
-    const float v_ref = uv[1];
-    const int u_ref_i = floorf(uv[0]); 
-    const int v_ref_i = floorf(uv[1]);
-    const float subpix_u_ref = u_ref-u_ref_i;
-    const float subpix_v_ref = v_ref-v_ref_i;
-    uint8_t* img_ptr = (uint8_t*) img.data + (v_ref_i)*width + (u_ref_i);
-    float gu = 2*(img_ptr[1] - img_ptr[-1]) + img_ptr[1-width] - img_ptr[-1-width] + img_ptr[1+width] - img_ptr[-1+width];
-    float gv = 2*(img_ptr[width] - img_ptr[-width]) + img_ptr[width+1] - img_ptr[-width+1] + img_ptr[width-1] - img_ptr[-width-1];
-    return fabs(gu)+fabs(gv);
-}
-
-void LidarSelector::getpatch(cv::Mat img, V2D pc, float* patch_tmp, int level) 
-{
-    const float u_ref = pc[0];
-    const float v_ref = pc[1];
-    const int scale =  (1<<level);
-    const int u_ref_i = floorf(pc[0]/scale)*scale; 
-    const int v_ref_i = floorf(pc[1]/scale)*scale;
-    const float subpix_u_ref = (u_ref-u_ref_i)/scale;
-    const float subpix_v_ref = (v_ref-v_ref_i)/scale;
-    const float w_ref_tl = (1.0-subpix_u_ref) * (1.0-subpix_v_ref);
-    const float w_ref_tr = subpix_u_ref * (1.0-subpix_v_ref);
-    const float w_ref_bl = (1.0-subpix_u_ref) * subpix_v_ref;
-    const float w_ref_br = subpix_u_ref * subpix_v_ref;
-    for (int x=0; x<patch_size; x++) 
-    {
-        uint8_t* img_ptr = (uint8_t*) img.data + (v_ref_i-patch_size_half*scale+x*scale)*width + (u_ref_i-patch_size_half*scale);
-        for (int y=0; y<patch_size; y++, img_ptr+=scale)
-        {
-            patch_tmp[patch_size_total*level+x*patch_size+y] = w_ref_tl*img_ptr[0] + w_ref_tr*img_ptr[scale] + w_ref_bl*img_ptr[scale*width] + w_ref_br*img_ptr[scale*width+scale];
-        }
+// TODO 如何获取patch
+void LidarSelector::getpatch(cv::Mat img, V2D pc, float *patch_tmp, int level) {
+  const float u_ref = pc[0];
+  const float v_ref = pc[1];
+  const int scale = (1 << level);
+  const int u_ref_i = floorf(pc[0] / scale) * scale;
+  const int v_ref_i = floorf(pc[1] / scale) * scale;
+  const float subpix_u_ref = (u_ref - u_ref_i) / scale;
+  const float subpix_v_ref = (v_ref - v_ref_i) / scale;
+  const float w_ref_tl = (1.0 - subpix_u_ref) * (1.0 - subpix_v_ref);
+  const float w_ref_tr = subpix_u_ref * (1.0 - subpix_v_ref);
+  const float w_ref_bl = (1.0 - subpix_u_ref) * subpix_v_ref;
+  const float w_ref_br = subpix_u_ref * subpix_v_ref;
+  for (int x = 0; x < patch_size; x++) {
+    uint8_t *img_ptr = (uint8_t *)img.data +
+                       (v_ref_i - patch_size_half * scale + x * scale) * width +
+                       (u_ref_i - patch_size_half * scale);
+    for (int y = 0; y < patch_size; y++, img_ptr += scale) {
+      patch_tmp[patch_size_total * level + x * patch_size + y] =
+          w_ref_tl * img_ptr[0] + w_ref_tr * img_ptr[scale] +
+          w_ref_bl * img_ptr[scale * width] +
+          w_ref_br * img_ptr[scale * width + scale];
     }
+  }
 }
 
-void LidarSelector::addSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg) 
-{
-    // double t0 = omp_get_wtime();
-    reset_grid();
+// 往地图中新加入地图点（添加落grid的里，且shiTomasiScore得分超过之前的分数的点）
+// 1.调用reset_grid（LidarSelector类）重置grid相关数据结构（grid_num、map_index、map_dist、voxel_points_、add_voxel_points_）
+// 2.循环每一个点云
+//  2.1.通过外参数矩阵和投影方程，得到该点的像素点，并判断该点的像素值是否在图像内，如果在则进行下一步
+//  2.2.计算该点在哪个格子中,即获取index
+//  2.3.计算该点的shiTomasiScore
+//  2.4.如果该点的shiTomasiScore得分超过之前的分数，就将该分数更新，且添加到add_voxel_points_中，并将该index的网赋成TYPE_POINTCLOUD
+// 3.遍历所有网格，且只有该网格的属性为TYPE_POINTCLOUD时，则
+//  3.1.调用三次getpatch（LidarSelector类）获取该点的具有3层金字塔的（长度为patch_size×patch_size×3）的patch
+//  3.2.构造一个ponit点（Point类型），参数为世界坐标系上的点
+//  3.3.构造一个Feature（Feature类型），参数为上一步计算的patch，像素坐标，归一化坐标，该帧的位姿，shiTomasiScore得分，该点处在的金字塔等级
+// TODO: 3.4.将frame的img和id，赋值给feature的img和id？
+//  3.5.调用addFrameRef(Point类型)，将feature添加到point中，作为观测，此时point内部观测+1
+//  3.6.point点的value更新至最新的shiTomasiScore分数
+//  3.7.调用void LidarSelector::AddPoint(PointPtr
+//  pt_new）将新的Point点加入feat_map全局体素地图中
 
-    // double t_b1 = omp_get_wtime() - t0;
-    // t0 = omp_get_wtime();
-    
-    for (int i=0; i<pg->size(); i++) 
-    {
-        V3D pt(pg->points[i].x, pg->points[i].y, pg->points[i].z);
-        V2D pc(new_frame_->w2c(pt));
-        if(new_frame_->cam_->isInFrame(pc.cast<int>(), (patch_size_half+1)*8)) // 20px is the patch size in the matcher
-        {
-            int index = static_cast<int>(pc[0]/grid_size)*grid_n_height + static_cast<int>(pc[1]/grid_size);
-            // float cur_value = CheckGoodPoints(img, pc);
-            float cur_value = vk::shiTomasiScore(img, pc[0], pc[1]);
+void LidarSelector::addSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg) {
+  // double t0 = omp_get_wtime();
+  reset_grid();
 
-            if (cur_value > map_value[index]) //&& (grid_num[index] != TYPE_MAP || map_value[index]<=10)) //! only add in not occupied grid
-            {
-                map_value[index] = cur_value;
-                add_voxel_points_[index] = pt;
-                grid_num[index] = TYPE_POINTCLOUD;
-            }
-        }
-    }
+  // double t_b1 = omp_get_wtime() - t0;
+  // t0 = omp_get_wtime();
+  // 把上一帧的LiDAR点云投影到当前帧的图像上，计算这个点的角点得分，如果超过地图点得分，则新加入这个点
+  std::cout << "addSparseMap boundary: " << ((patch_size_half + 1) * 8)
+            << std::endl;
 
-    // double t_b2 = omp_get_wtime() - t0;
-    // t0 = omp_get_wtime();
-    
-    int add=0;
-    for (int i=0; i<length; i++) 
-    {
-        if (grid_num[i]==TYPE_POINTCLOUD)// && (map_value[i]>=10)) //! debug
-        {
-            V3D pt = add_voxel_points_[i];
-            V2D pc(new_frame_->w2c(pt));
-            float* patch = new float[patch_size_total*3];
-            getpatch(img, pc, patch, 0);
-            getpatch(img, pc, patch, 1);
-            getpatch(img, pc, patch, 2);
-            PointPtr pt_new(new Point(pt));
-            Vector3d f = cam->cam2world(pc);
-            FeaturePtr ftr_new(new Feature(patch, pc, f, new_frame_->T_f_w_, map_value[i], 0));
-            ftr_new->img = new_frame_->img_pyr_[0];
-            // ftr_new->ImgPyr.resize(5);
-            // for(int i=0;i<5;i++) ftr_new->ImgPyr[i] = new_frame_->img_pyr_[i];
-            ftr_new->id_ = new_frame_->id_;
-
-            pt_new->addFrameRef(ftr_new);
-            pt_new->value = map_value[i];
-            AddPoint(pt_new);
-            add += 1;
-        }
-    }
-
-    // double t_b3 = omp_get_wtime() - t0;
-
-    printf("[ VIO ]: Add %d 3D points.\n", add);
-    // printf("pg.size: %d \n", pg->size());
-    // printf("B1. : %.6lf \n", t_b1);
-    // printf("B2. : %.6lf \n", t_b2);
-    // printf("B3. : %.6lf \n", t_b3);
-}
-
-void LidarSelector::AddPoint(PointPtr pt_new)
-{
-    V3D pt_w(pt_new->pos_[0], pt_new->pos_[1], pt_new->pos_[2]);
-    double voxel_size = 0.5;
-    float loc_xyz[3];
-    for(int j=0; j<3; j++)
-    {
-      loc_xyz[j] = pt_w[j] / voxel_size;
-      if(loc_xyz[j] < 0)
-      {
-        loc_xyz[j] -= 1.0;
+  for (int i = 0; i < pg->size(); i++) {
+    V3D pt(pg->points[i].x, pg->points[i].y, pg->points[i].z);
+    V2D pc(new_frame_->w2c(pt));
+    // 20px is the patch size in the matcher
+    // patch_size_half为4， patch_size为8
+    if (new_frame_->cam_->isInFrame(pc.cast<int>(),
+                                    (patch_size_half + 1) * 8)) {
+      // TODO index计算有问题？
+      int index = static_cast<int>(pc[0] / grid_size) * grid_n_height +
+                  static_cast<int>(pc[1] / grid_size);
+      // float cur_value = CheckGoodPoints(img, pc);
+      // 计算这个lidar点对应的视觉特征点的shiTomasi得分，得分超过原先地图中的patch得分的话，加入这个点的观测
+      float cur_value = vk::shiTomasiScore(img, pc[0], pc[1]);
+      //&& (grid_num[index] != TYPE_MAP ||
+      // map_value[index]<=10)) //! only add
+      // in not occupied grid
+      if (cur_value > map_value[index]) {
+        map_value[index] = cur_value;
+        add_voxel_points_[index] = pt;
+        grid_num[index] = TYPE_POINTCLOUD;
       }
     }
-    VOXEL_KEY position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
-    auto iter = feat_map.find(position);
-    if(iter != feat_map.end())
+  }
+
+  // double t_b2 = omp_get_wtime() - t0;
+  // t0 = omp_get_wtime();
+
+  int add = 0;
+  for (int i = 0; i < length; i++) {
+    if (grid_num[i] == TYPE_POINTCLOUD) // && (map_value[i]>=10)) //! debug
     {
-      iter->second->voxel_points.push_back(pt_new);
-      iter->second->count++;
+      V3D pt = add_voxel_points_[i];
+      V2D pc(new_frame_->w2c(pt));
+      // patch_size_total = patch_size × patch_size_total（8 × 8 = 64）
+      float *patch = new float[patch_size_total * 3];
+      // 获取三个不同尺度的patch
+      getpatch(img, pc, patch, 0);
+      getpatch(img, pc, patch, 1);
+      getpatch(img, pc, patch, 2);
+      PointPtr pt_new(new Point(pt));
+      // Project from pixels to world coordiantes. Returns a bearing vector of
+      // unit length. 归一化坐标
+      Vector3d f = cam->cam2world(pc);
+      FeaturePtr ftr_new(
+          new Feature(patch, pc, f, new_frame_->T_f_w_, map_value[i], 0));
+      ftr_new->img = new_frame_->img_pyr_[0];
+      // ftr_new->ImgPyr.resize(5);
+      // for(int i=0;i<5;i++) ftr_new->ImgPyr[i] = new_frame_->img_pyr_[i];
+      ftr_new->id_ = new_frame_->id_;
+
+      pt_new->addFrameRef(ftr_new);
+      pt_new->value = map_value[i];
+      AddPoint(pt_new);
+      add += 1;
     }
-    else
-    {
-      VOXEL_POINTS *ot = new VOXEL_POINTS(0);
-      ot->voxel_points.push_back(pt_new);
-      feat_map[position] = ot;
+  }
+
+  // double t_b3 = omp_get_wtime() - t0;
+
+  printf("[ VIO ]: Add %d 3D points.\n", add);
+  // printf("pg.size: %d \n", pg->size());
+  // printf("B1. : %.6lf \n", t_b1);
+  // printf("B2. : %.6lf \n", t_b2);
+  // printf("B3. : %.6lf \n", t_b3);
+}
+
+// 添加到全局体素地图中，分辨率为0.5，即0.5米长的正方体内所有的point会被变成一个体素。
+// 该体素内会有一堆std::vector<PointPtr>点
+void LidarSelector::AddPoint(PointPtr pt_new) {
+  V3D pt_w(pt_new->pos_[0], pt_new->pos_[1], pt_new->pos_[2]);
+  double voxel_size = 0.5;
+  float loc_xyz[3];
+  for (int j = 0; j < 3; j++) {
+    loc_xyz[j] = pt_w[j] / voxel_size;
+    if (loc_xyz[j] < 0) {
+      //确保点坐标在负数时被正确地映射到对应的体素。如果不减去 1.0，对负数坐标的整数截断可能会导致错误的体素索引。
+      loc_xyz[j] -= 1.0;
     }
+  }
+  VOXEL_KEY position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1],
+                     (int64_t)loc_xyz[2]);
+  auto iter = feat_map.find(position);
+  if (iter != feat_map.end()) {
+    iter->second->voxel_points.push_back(pt_new);
+    iter->second->count++;
+  } else {
+    VOXEL_POINTS *ot = new VOXEL_POINTS(0);
+    ot->voxel_points.push_back(pt_new);
+    feat_map[position] = ot;
+  }
 }
 
 void LidarSelector::getWarpMatrixAffine(
-    const vk::AbstractCamera& cam,
-    const Vector2d& px_ref,
-    const Vector3d& f_ref,
-    const double depth_ref,
-    const SE3& T_cur_ref,
-    const int level_ref,    // the corresponding pyrimid level of px_ref
-    const int pyramid_level,
-    const int halfpatch_size,
-    Matrix2d& A_cur_ref)
-{
+    const vk::AbstractCamera &cam, const Vector2d &px_ref,
+    const Vector3d &f_ref, const double depth_ref, const SE3 &T_cur_ref,
+    const int level_ref, // the corresponding pyrimid level of px_ref
+    const int pyramid_level, const int halfpatch_size, Matrix2d &A_cur_ref) {
   // Compute affine warp matrix A_ref_cur
-  const Vector3d xyz_ref(f_ref*depth_ref);
-  Vector3d xyz_du_ref(cam.cam2world(px_ref + Vector2d(halfpatch_size,0)*(1<<level_ref)*(1<<pyramid_level)));
-  Vector3d xyz_dv_ref(cam.cam2world(px_ref + Vector2d(0,halfpatch_size)*(1<<level_ref)*(1<<pyramid_level)));
-//   Vector3d xyz_du_ref(cam.cam2world(px_ref + Vector2d(halfpatch_size,0)*(1<<level_ref)));
-//   Vector3d xyz_dv_ref(cam.cam2world(px_ref + Vector2d(0,halfpatch_size)*(1<<level_ref)));
-  xyz_du_ref *= xyz_ref[2]/xyz_du_ref[2];
-  xyz_dv_ref *= xyz_ref[2]/xyz_dv_ref[2];
-  const Vector2d px_cur(cam.world2cam(T_cur_ref*(xyz_ref)));
-  const Vector2d px_du(cam.world2cam(T_cur_ref*(xyz_du_ref)));
-  const Vector2d px_dv(cam.world2cam(T_cur_ref*(xyz_dv_ref)));
-  A_cur_ref.col(0) = (px_du - px_cur)/halfpatch_size;
-  A_cur_ref.col(1) = (px_dv - px_cur)/halfpatch_size;
+  const Vector3d xyz_ref(f_ref * depth_ref);
+  Vector3d xyz_du_ref(
+      cam.cam2world(px_ref + Vector2d(halfpatch_size, 0) * (1 << level_ref) *
+                                 (1 << pyramid_level)));
+  Vector3d xyz_dv_ref(
+      cam.cam2world(px_ref + Vector2d(0, halfpatch_size) * (1 << level_ref) *
+                                 (1 << pyramid_level)));
+  //   Vector3d xyz_du_ref(cam.cam2world(px_ref +
+  //   Vector2d(halfpatch_size,0)*(1<<level_ref))); Vector3d
+  //   xyz_dv_ref(cam.cam2world(px_ref +
+  //   Vector2d(0,halfpatch_size)*(1<<level_ref)));
+  xyz_du_ref *= xyz_ref[2] / xyz_du_ref[2];
+  xyz_dv_ref *= xyz_ref[2] / xyz_dv_ref[2];
+  const Vector2d px_cur(cam.world2cam(T_cur_ref * (xyz_ref)));
+  const Vector2d px_du(cam.world2cam(T_cur_ref * (xyz_du_ref)));
+  const Vector2d px_dv(cam.world2cam(T_cur_ref * (xyz_dv_ref)));
+  A_cur_ref.col(0) = (px_du - px_cur) / halfpatch_size;
+  A_cur_ref.col(1) = (px_dv - px_cur) / halfpatch_size;
 }
 
-void LidarSelector::warpAffine(
-    const Matrix2d& A_cur_ref,
-    const cv::Mat& img_ref,
-    const Vector2d& px_ref,
-    const int level_ref,
-    const int search_level,
-    const int pyramid_level,
-    const int halfpatch_size,
-    float* patch)
-{
-  const int patch_size = halfpatch_size*2 ;
+void LidarSelector::warpAffine(const Matrix2d &A_cur_ref,
+                               const cv::Mat &img_ref, const Vector2d &px_ref,
+                               const int level_ref, const int search_level,
+                               const int pyramid_level,
+                               const int halfpatch_size, float *patch) {
+  const int patch_size = halfpatch_size * 2;
   const Matrix2f A_ref_cur = A_cur_ref.inverse().cast<float>();
-  if(isnan(A_ref_cur(0,0)))
-  {
+  if (isnan(A_ref_cur(0, 0))) {
     printf("Affine warp is NaN, probably camera has no translation\n"); // TODO
     return;
   }
-//   Perform the warp on a larger patch.
-//   float* patch_ptr = patch;
-//   const Vector2f px_ref_pyr = px_ref.cast<float>() / (1<<level_ref) / (1<<pyramid_level);
-//   const Vector2f px_ref_pyr = px_ref.cast<float>() / (1<<level_ref);
-  for (int y=0; y<patch_size; ++y)
-  {
-    for (int x=0; x<patch_size; ++x)//, ++patch_ptr)
+  //   Perform the warp on a larger patch.
+  //   float* patch_ptr = patch;
+  //   const Vector2f px_ref_pyr = px_ref.cast<float>() / (1<<level_ref) /
+  //   (1<<pyramid_level); const Vector2f px_ref_pyr = px_ref.cast<float>() /
+  //   (1<<level_ref);
+  for (int y = 0; y < patch_size; ++y) {
+    for (int x = 0; x < patch_size; ++x) //, ++patch_ptr)
     {
       // P[patch_size_total*level + x*patch_size+y]
-      Vector2f px_patch(x-halfpatch_size, y-halfpatch_size);
-      px_patch *= (1<<search_level);
-      px_patch *= (1<<pyramid_level);
-      const Vector2f px(A_ref_cur*px_patch + px_ref.cast<float>());
-      if (px[0]<0 || px[1]<0 || px[0]>=img_ref.cols-1 || px[1]>=img_ref.rows-1)
-        patch[patch_size_total*pyramid_level + y*patch_size+x] = 0;
-        // *patch_ptr = 0;
+      Vector2f px_patch(x - halfpatch_size, y - halfpatch_size);
+      px_patch *= (1 << search_level);
+      px_patch *= (1 << pyramid_level);
+      const Vector2f px(A_ref_cur * px_patch + px_ref.cast<float>());
+      if (px[0] < 0 || px[1] < 0 || px[0] >= img_ref.cols - 1 ||
+          px[1] >= img_ref.rows - 1)
+        patch[patch_size_total * pyramid_level + y * patch_size + x] = 0;
+      // *patch_ptr = 0;
       else
-        patch[patch_size_total*pyramid_level + y*patch_size+x] = (float) vk::interpolateMat_8u(img_ref, px[0], px[1]);
-        // *patch_ptr = (uint8_t) vk::interpolateMat_8u(img_ref, px[0], px[1]);
+        patch[patch_size_total * pyramid_level + y * patch_size + x] =
+            (float)vk::interpolateMat_8u(img_ref, px[0], px[1]);
+      // *patch_ptr = (uint8_t) vk::interpolateMat_8u(img_ref, px[0], px[1]);
     }
   }
 }
 
-double LidarSelector::NCC(float* ref_patch, float* cur_patch, int patch_size)
-{    
-    double sum_ref = std::accumulate(ref_patch, ref_patch + patch_size, 0.0);
-    double mean_ref =  sum_ref / patch_size;
+double LidarSelector::NCC(float *ref_patch, float *cur_patch, int patch_size) {
+  double sum_ref = std::accumulate(ref_patch, ref_patch + patch_size, 0.0);
+  double mean_ref = sum_ref / patch_size;
 
-    double sum_cur = std::accumulate(cur_patch, cur_patch + patch_size, 0.0);
-    double mean_curr =  sum_cur / patch_size;
+  double sum_cur = std::accumulate(cur_patch, cur_patch + patch_size, 0.0);
+  double mean_curr = sum_cur / patch_size;
 
-    double numerator = 0, demoniator1 = 0, demoniator2 = 0;
-    for (int i = 0; i < patch_size; i++) 
-    {
-        double n = (ref_patch[i] - mean_ref) * (cur_patch[i] - mean_curr);
-        numerator += n;
-        demoniator1 += (ref_patch[i] - mean_ref) * (ref_patch[i] - mean_ref);
-        demoniator2 += (cur_patch[i] - mean_curr) * (cur_patch[i] - mean_curr);
-    }
-    return numerator / sqrt(demoniator1 * demoniator2 + 1e-10);
+  double numerator = 0, demoniator1 = 0, demoniator2 = 0;
+  for (int i = 0; i < patch_size; i++) {
+    double n = (ref_patch[i] - mean_ref) * (cur_patch[i] - mean_curr);
+    numerator += n;
+    demoniator1 += (ref_patch[i] - mean_ref) * (ref_patch[i] - mean_ref);
+    demoniator2 += (cur_patch[i] - mean_curr) * (cur_patch[i] - mean_curr);
+  }
+  return numerator / sqrt(demoniator1 * demoniator2 + 1e-10);
 }
 
-int LidarSelector::getBestSearchLevel(
-    const Matrix2d& A_cur_ref,
-    const int max_level)
-{
+int LidarSelector::getBestSearchLevel(const Matrix2d &A_cur_ref,
+                                      const int max_level) {
   // Compute patch level in other image
   int search_level = 0;
   double D = A_cur_ref.determinant();
 
-  while(D > 3.0 && search_level < max_level)
-  {
+  while (D > 3.0 && search_level < max_level) {
     search_level += 1;
     D *= 0.25;
   }
   return search_level;
 }
 
-void LidarSelector::createPatchFromPatchWithBorder(float* patch_with_border, float* patch_ref)
-{
-  float* ref_patch_ptr = patch_ref;
-  for(int y=1; y<patch_size+1; ++y, ref_patch_ptr += patch_size)
-  {
-    float* ref_patch_border_ptr = patch_with_border + y*(patch_size+2) + 1;
-    for(int x=0; x<patch_size; ++x)
+void LidarSelector::createPatchFromPatchWithBorder(float *patch_with_border,
+                                                   float *patch_ref) {
+  float *ref_patch_ptr = patch_ref;
+  for (int y = 1; y < patch_size + 1; ++y, ref_patch_ptr += patch_size) {
+    float *ref_patch_border_ptr = patch_with_border + y * (patch_size + 2) + 1;
+    for (int x = 0; x < patch_size; ++x)
       ref_patch_ptr[x] = ref_patch_border_ptr[x];
   }
 }
 
-void LidarSelector::addFromSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg)
-{
-    if(feat_map.size()<=0) return;
-    // double ts0 = omp_get_wtime();
+// 传入当前帧图像和上一帧的LIDAR点云，计算这些点云中选择为当前帧图像的某个网格中的点，
+// 并计算这个点附着的和当前帧观测角度最相近的patch，
+// 然后计算这个patch所在帧和当前帧之间的affine变换，
+// 然后计算patch所在帧在当前帧的图像下对应patch位置的像素值，
+// 最后计算patch和当前帧观测到的patch之间的像素误差
+void LidarSelector::addFromSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg) {
+  //如果整个视觉地图feat_map的点云数量为0,则直接返回
+  if (feat_map.size() <= 0) {
+    std::cout << "feat_map num is zero" << std::endl;
+    return;
+  }
+  // double ts0 = omp_get_wtime();
 
-    pg_down->reserve(feat_map.size());
-    downSizeFilter.setInputCloud(pg);
-    downSizeFilter.filter(*pg_down);
-    
-    reset_grid();
-    memset(map_value, 0, sizeof(float)*length);
+  pg_down->reserve(feat_map.size());
+  downSizeFilter.setInputCloud(pg);
+  downSizeFilter.filter(*pg_down);
 
-    sub_sparse_map->reset();
-    deque< PointPtr >().swap(sub_map_cur_frame_);
+  reset_grid();
+  memset(map_value, 0, sizeof(float) * length);
 
-    float voxel_size = 0.5;
-    
-    unordered_map<VOXEL_KEY, float>().swap(sub_feat_map);
-    unordered_map<int, Warp*>().swap(Warp_map);
+  sub_sparse_map->reset();
+  deque<PointPtr>().swap(sub_map_cur_frame_);
 
-    // cv::Mat depth_img = cv::Mat::zeros(height, width, CV_32FC1);
-    // float* it = (float*)depth_img.data;
+  float voxel_size = 0.5;
 
-    float it[height*width] = {0.0};
+  unordered_map<VOXEL_KEY, float>().swap(sub_feat_map);
+  unordered_map<int, Warp *>().swap(Warp_map);
 
-    double t_insert, t_depth, t_position;
-    t_insert=t_depth=t_position=0;
+  cv::Mat depth_img = cv::Mat::zeros(height, width, CV_32FC1);
+  float *it = (float *)depth_img.data;
 
-    int loc_xyz[3];
+  // float it[height * width] = {0.0};
 
-    // printf("A0. initial depthmap: %.6lf \n", omp_get_wtime() - ts0);
-    // double ts1 = omp_get_wtime();
+  double t_insert, t_depth, t_position;
+  t_insert = t_depth = t_position = 0;
 
-    for(int i=0; i<pg_down->size(); i++)
-    {
-        // Transform Point to world coordinate
-        V3D pt_w(pg_down->points[i].x, pg_down->points[i].y, pg_down->points[i].z);
+  int loc_xyz[3];
 
-        // Determine the key of hash table      
-        for(int j=0; j<3; j++)
-        {
-            loc_xyz[j] = floor(pt_w[j] / voxel_size);
-        }
-        VOXEL_KEY position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+  // printf("A0. initial depthmap: %.6lf \n", omp_get_wtime() - ts0);
+  // double ts1 = omp_get_wtime();
 
-        auto iter = sub_feat_map.find(position);
-        if(iter == sub_feat_map.end())
-        {
-            sub_feat_map[position] = 1.0;
-        }
-                    
-        V3D pt_c(new_frame_->w2f(pt_w));
-
-        V2D px;
-        if(pt_c[2] > 0)
-        {
-            px[0] = fx * pt_c[0]/pt_c[2] + cx;
-            px[1] = fy * pt_c[1]/pt_c[2] + cy;
-
-            if(new_frame_->cam_->isInFrame(px.cast<int>(), (patch_size_half+1)*8))
-            {
-                float depth = pt_c[2];
-                int col = int(px[0]);
-                int row = int(px[1]);
-                it[width*row+col] = depth;        
-            }
-        }
+  for (int i = 0; i < pg_down->size(); i++) {
+    // Transform Point to world coordinate
+    V3D pt_w(pg_down->points[i].x, pg_down->points[i].y, pg_down->points[i].z);
+    // std::cout << "pt_w: " << pt_w.transpose() << std::endl;
+    // Determine the key of hash table
+    for (int j = 0; j < 3; j++) {
+      loc_xyz[j] = floor(pt_w[j] / voxel_size);
     }
-    
-    // imshow("depth_img", depth_img);
-    // printf("A1: %.6lf \n", omp_get_wtime() - ts1);
-    // printf("A11. calculate pt position: %.6lf \n", t_position);
-    // printf("A12. sub_postion.insert(position): %.6lf \n", t_insert);
-    // printf("A13. generate depth map: %.6lf \n", t_depth);
-    // printf("A. projection: %.6lf \n", omp_get_wtime() - ts0);
-    
+    VOXEL_KEY position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    // std::cout << "position: " << V3D(loc_xyz[0],
+    // loc_xyz[1],loc_xyz[2]).transpose()  << std::endl;
 
-    // double t1 = omp_get_wtime();
-
-    for(auto& iter : sub_feat_map)
-    {   
-        VOXEL_KEY position = iter.first;
-        // double t4 = omp_get_wtime();
-        auto corre_voxel = feat_map.find(position);
-        // double t5 = omp_get_wtime();
-
-        if(corre_voxel != feat_map.end())
-        {
-            std::vector<PointPtr> &voxel_points = corre_voxel->second->voxel_points;
-            int voxel_num = voxel_points.size();
-            for (int i=0; i<voxel_num; i++)
-            {
-                PointPtr pt = voxel_points[i];
-                if(pt==nullptr) continue;
-                V3D pt_cam(new_frame_->w2f(pt->pos_));
-                if(pt_cam[2]<0) continue;
-
-                V2D pc(new_frame_->w2c(pt->pos_));
-
-                FeaturePtr ref_ftr;
-      
-                if(new_frame_->cam_->isInFrame(pc.cast<int>(), (patch_size_half+1)*8)) // 20px is the patch size in the matcher
-                {
-                    int index = static_cast<int>(pc[0]/grid_size)*grid_n_height + static_cast<int>(pc[1]/grid_size);
-                    grid_num[index] = TYPE_MAP;
-                    Vector3d obs_vec(new_frame_->pos() - pt->pos_);
-
-                    float cur_dist = obs_vec.norm();
-                    float cur_value = pt->value;
-
-                    if (cur_dist <= map_dist[index]) 
-                    {
-                        map_dist[index] = cur_dist;
-                        voxel_points_[index] = pt;
-                    } 
-
-                    if (cur_value >= map_value[index])
-                    {
-                        map_value[index] = cur_value;
-                    }
-                }
-            }    
-        } 
+    // 在sub_feat_map（unordered_map类型）寻找position
+    auto iter = sub_feat_map.find(position);
+    if (iter == sub_feat_map.end()) {
+      sub_feat_map[position] = 1.0;
     }
-        
-    // double t2 = omp_get_wtime();
 
-    // cout<<"B. feat_map.find: "<<t2-t1<<endl;
+    // 世界坐标系转到相机坐标系下
+    V3D pt_c(new_frame_->w2f(pt_w));
 
-    double t_2, t_3, t_4, t_5;
-    t_2=t_3=t_4=t_5=0;
+    // 将相机前方的点转到像素坐标系下（没有考虑畸变参数），
+    V2D px;
+    if (pt_c[2] > 0) { // 在相机的前面的点
+      px[0] = fx * pt_c[0] / pt_c[2] + cx;
+      px[1] = fy * pt_c[1] / pt_c[2] + cy;
 
-    for (int i=0; i<length; i++) 
-    { 
-        if (grid_num[i]==TYPE_MAP) //&& map_value[i]>10)
-        {
-            // double t_1 = omp_get_wtime();
+      // 判断该点是否在相机视野内，并为这个点赋予深度值，
+      if (new_frame_->cam_->isInFrame(px.cast<int>(),
+                                      (patch_size_half + 1) * 8)) {
+        float depth = pt_c[2];
+        int col = int(px[0]);
+        int row = int(px[1]);
+        it[width * row + col] = depth;
+      }
+    }
+  }
 
-            PointPtr pt = voxel_points_[i];
+  // imshow("depth_img", depth_img);
+  // printf("A1: %.6lf \n", omp_get_wtime() - ts1);
+  // printf("A11. calculate pt position: %.6lf \n", t_position);
+  // printf("A12. sub_postion.insert(position): %.6lf \n", t_insert);
+  // printf("A13. generate depth map: %.6lf \n", t_depth);
+  // printf("A. projection: %.6lf \n", omp_get_wtime() - ts0);
 
-            if(pt==nullptr) continue;
+  // double t1 = omp_get_wtime();
 
-            V2D pc(new_frame_->w2c(pt->pos_));
-            V3D pt_cam(new_frame_->w2f(pt->pos_));
-   
-            bool depth_continous = false;
-            for (int u=-patch_size_half; u<=patch_size_half; u++)
-            {
-                for (int v=-patch_size_half; v<=patch_size_half; v++)
-                {
-                    if(u==0 && v==0) continue;
+  // 遍历所有的体素
+  for (auto &iter : sub_feat_map) {
+    VOXEL_KEY position = iter.first;
+    // double t4 = omp_get_wtime();
+    auto corre_voxel = feat_map.find(position);
+    // double t5 = omp_get_wtime();
 
-                    float depth = it[width*(v+int(pc[1]))+u+int(pc[0])];
+    // 如果这个体素存在于地图中，则把体素中的点全部投影到当前帧图像上，寻找可以使用的地图点
+    if (corre_voxel != feat_map.end()) {
+      std::vector<PointPtr> &voxel_points = corre_voxel->second->voxel_points;
+      int voxel_num = voxel_points.size();
+      for (int i = 0; i < voxel_num; i++) {
+        PointPtr pt = voxel_points[i];
+        if (pt == nullptr)
+          continue;
+        V3D pt_cam(new_frame_->w2f(pt->pos_));
+        if (pt_cam[2] < 0)
+          continue;
+        // 世界坐标系的点转到像素坐标系下
+        V2D pc(new_frame_->w2c(pt->pos_));
 
-                    if(depth == 0.) continue;
+        // FeaturePtr ref_ftr;
+        // 20px is the patch size in the matcher
+        if (new_frame_->cam_->isInFrame(pc.cast<int>(),
+                                        (patch_size_half + 1) * 8)) {
+          int index = static_cast<int>(pc[0] / grid_size) * grid_n_height +
+                      static_cast<int>(pc[1] / grid_size);
+          grid_num[index] = TYPE_MAP;
 
-                    double delta_dist = abs(pt_cam[2]-depth);
+          // 当前点和相机之间构成的观测向量，注意仍然是在world系下表示的
+          Vector3d obs_vec(new_frame_->pos() - pt->pos_);
 
-                    if(delta_dist > 1.5)
-                    {                
-                        depth_continous = true;
-                        break;
-                    }
-                }
-                if(depth_continous) break;
-            }
-            if(depth_continous) continue;
+          // 向量范数，即差值模值
+          float cur_dist = obs_vec.norm();
+          // value是shiTomasiScore，也就是角点的得分，得分越高，说明这个角点越明显
+          float cur_value = pt->value;
 
-            // t_2 += omp_get_wtime() - t_1;
+          //论文中说的，为了防止遮挡，会选40x40的grid中像素最小的那个点
+          if (cur_dist <= map_dist[index]) {
+            map_dist[index] = cur_dist;
+            voxel_points_[index] = pt;
+          }
 
-            // t_1 = omp_get_wtime();
-            
-            FeaturePtr ref_ftr;
-
-            if(!pt->getCloseViewObs(new_frame_->pos(), ref_ftr, pc)) continue;
-
-            // t_3 += omp_get_wtime() - t_1;
-
-            float* patch_wrap = new float[patch_size_total*3];
-
-            patch_wrap = ref_ftr->patch;
-
-            // t_1 = omp_get_wtime();
-           
-            int search_level;
-            Matrix2d A_cur_ref_zero;
-
-            auto iter_warp = Warp_map.find(ref_ftr->id_);
-            if(iter_warp != Warp_map.end())
-            {
-                search_level = iter_warp->second->search_level;
-                A_cur_ref_zero = iter_warp->second->A_cur_ref;
-            }
-            else
-            {
-                getWarpMatrixAffine(*cam, ref_ftr->px, ref_ftr->f, (ref_ftr->pos() - pt->pos_).norm(), 
-                new_frame_->T_f_w_ * ref_ftr->T_f_w_.inverse(), 0, 0, patch_size_half, A_cur_ref_zero);
-                
-                search_level = getBestSearchLevel(A_cur_ref_zero, 2);
-
-                Warp *ot = new Warp(search_level, A_cur_ref_zero);
-                Warp_map[ref_ftr->id_] = ot;
-            }
-
-            // t_4 += omp_get_wtime() - t_1;
-
-            // t_1 = omp_get_wtime();
-
-            for(int pyramid_level=0; pyramid_level<=0; pyramid_level++)
-            {                
-                warpAffine(A_cur_ref_zero, ref_ftr->img, ref_ftr->px, ref_ftr->level, search_level, pyramid_level, patch_size_half, patch_wrap);
-            }
-
-            getpatch(img, pc, patch_cache, 0);
-
-            if(ncc_en)
-            {
-                double ncc = NCC(patch_wrap, patch_cache, patch_size_total);
-                if(ncc < ncc_thre) continue;
-            }
-
-            float error = 0.0;
-            for (int ind=0; ind<patch_size_total; ind++) 
-            {
-                error += (patch_wrap[ind]-patch_cache[ind]) * (patch_wrap[ind]-patch_cache[ind]);
-            }
-            if(error > outlier_threshold*patch_size_total) continue;
-            
-            sub_map_cur_frame_.push_back(pt);
-
-            sub_sparse_map->align_errors.push_back(error);
-            sub_sparse_map->propa_errors.push_back(error);
-            sub_sparse_map->search_levels.push_back(search_level);
-            sub_sparse_map->errors.push_back(error);
-            sub_sparse_map->index.push_back(i);  //index
-            sub_sparse_map->voxel_points.push_back(pt);
-            sub_sparse_map->patch.push_back(patch_wrap);
-            // sub_sparse_map->px_cur.push_back(pc);
-            // sub_sparse_map->propa_px_cur.push_back(pc);
-            // t_5 += omp_get_wtime() - t_1;
+          if (cur_value >= map_value[index]) {
+            map_value[index] = cur_value;
+          }
         }
+      }
     }
-    // double t3 = omp_get_wtime();
-    // cout<<"C. addSubSparseMap: "<<t3-t2<<endl;
-    // cout<<"depthcontinuous: C1 "<<t_2<<" C2 "<<t_3<<" C3 "<<t_4<<" C4 "<<t_5<<endl;
-    printf("[ VIO ]: choose %d points from sub_sparse_map.\n", int(sub_sparse_map->index.size()));
+  }
+
+  // double t2 = omp_get_wtime();
+
+  // cout<<"B. feat_map.find: "<<t2-t1<<endl;
+
+  double t_2, t_3, t_4, t_5;
+  t_2 = t_3 = t_4 = t_5 = 0;
+  // Step
+  // 3:遍历上面的所有网格，如果里面有3D点，那么进一步处理看是否要把这个3D点作为最后的观测
+  for (int i = 0; i < length; i++) {
+    //&& map_value[i]>10)
+    if (grid_num[i] == TYPE_MAP) {
+      // double t_1 = omp_get_wtime();
+
+      PointPtr pt = voxel_points_[i];
+
+      if (pt == nullptr)
+        continue;
+
+      V2D pc(new_frame_->w2c(pt->pos_));
+      V3D pt_cam(new_frame_->w2f(pt->pos_));
+
+      // Step 3.1:判断点深度连续性，即当前点其周围8个patch像素的深度差别不应该太大
+      bool depth_continous = false;
+      for (int u = -patch_size_half; u <= patch_size_half; u++) {
+        for (int v = -patch_size_half; v <= patch_size_half; v++) {
+          if (u == 0 && v == 0)
+            continue;
+
+          float depth = it[width * (v + int(pc[1])) + u + int(pc[0])];
+
+          if (depth == 0.)
+            continue;
+
+          double delta_dist = abs(pt_cam[2] - depth);
+
+          if (delta_dist > 1.5) {
+            depth_continous = true;
+            break;
+          }
+        }
+        if (depth_continous)
+          break;
+      }
+
+      if (depth_continous)
+        continue;
+
+      // t_2 += omp_get_wtime() - t_1;
+      // t_1 = omp_get_wtime();
+      // Step 3.2:寻找这个地图点的所有patch中，和当前的图像的观测角度最相近的那个patch
+      FeaturePtr ref_ftr;
+
+      // get frame with same point of view AND same pyramid level
+      //找到与当前图像的观察角度最接近的点作为参考，只用观测方向进行了判断
+      if (!pt->getCloseViewObs(new_frame_->pos(), ref_ftr, pc))
+        continue;
+
+      // t_3 += omp_get_wtime() - t_1;
+      // patch_size_total 是patch占用的所有像素，比如 8*8=64
+      // 因为有图像金字塔，缩放两次，加上原始图像，所一共有3个wrap
+      // 地图中匹配的patch像素
+      float *patch_wrap = new float[patch_size_total * 3];
+
+      patch_wrap = ref_ftr->patch;
+
+      // t_1 = omp_get_wtime();
+
+      int search_level;
+      Matrix2d A_cur_ref_zero;
+      // Step 3.3: 计算这个patch所在的图像帧和当前帧的图像像素之间的affine变换
+      // 这个 ref_ftr->id_
+      // 应该是这个patch所在的图像的id，因为对于一个图像来说和当前帧的affine变换应该是一样的
+      auto iter_warp = Warp_map.find(ref_ftr->id_);
+      if (iter_warp != Warp_map.end()) {
+        // 地图中这个 patch 对应图像和当前图像之间的 warp 的金字塔
+        search_level = iter_warp->second->search_level;
+        A_cur_ref_zero = iter_warp->second->A_cur_ref;
+      } else {
+        getWarpMatrixAffine(*cam, ref_ftr->px, ref_ftr->f,
+                            (ref_ftr->pos() - pt->pos_).norm(),
+                            new_frame_->T_f_w_ * ref_ftr->T_f_w_.inverse(), 0,
+                            0, patch_size_half, A_cur_ref_zero);
+        // 判断到哪个层里面寻找像素对应关系
+        // 找到尺度相近的层
+        search_level = getBestSearchLevel(A_cur_ref_zero, 2);
+
+        Warp *ot = new Warp(search_level, A_cur_ref_zero);
+        // 更新warp_map
+        Warp_map[ref_ftr->id_] = ot;
+      }
+
+      // t_4 += omp_get_wtime() - t_1;
+
+      // t_1 = omp_get_wtime();
+      // Step 3.4:利用affien变换，计算ref帧的patch变换到当前帧的图像之后的像素值
+      for (int pyramid_level = 0; pyramid_level <= 0; pyramid_level++) {
+        warpAffine(A_cur_ref_zero, ref_ftr->img, ref_ftr->px, ref_ftr->level,
+                   search_level, pyramid_level, patch_size_half, patch_wrap);
+      }
+      // Step 3.5: 对当前帧的图像取patch，得到patch中的像素值
+      getpatch(img, pc, patch_cache, 0);
+
+      if (ncc_en) {
+        double ncc = NCC(patch_wrap, patch_cache, patch_size_total);
+        if (ncc < ncc_thre)
+          continue;
+      }
+
+      // Step 3.6: 计算ref帧的patch和cur帧的patch之间的像素误差
+      float error = 0.0;
+      for (int ind = 0; ind < patch_size_total; ind++) {
+        error += (patch_wrap[ind] - patch_cache[ind]) *
+                 (patch_wrap[ind] - patch_cache[ind]);
+      }
+      // Step 3.7:
+      // 如果这个误差过大，说明可能是误匹配，那么就不要这个patch对的观测了
+      if (error > outlier_threshold * patch_size_total)
+        continue;
+      // Step 3.8: 收尾工作，当前点可以用，把所有的信息收集起来
+      // 把这个LiDAR地图点存储起来，实际上不是优化过程中用的
+      sub_map_cur_frame_.push_back(pt);
+
+      // 把当前这个点加到视觉稀疏子地图中，视觉稀疏子地图才是后面真正要用的
+      sub_sparse_map->align_errors.push_back(error);
+      sub_sparse_map->propa_errors.push_back(error);
+      sub_sparse_map->search_levels.push_back(search_level);
+      sub_sparse_map->errors.push_back(error);
+      sub_sparse_map->index.push_back(i); // index
+      sub_sparse_map->voxel_points.push_back(pt);
+      sub_sparse_map->patch.push_back(patch_wrap);
+      // sub_sparse_map->px_cur.push_back(pc);
+      // sub_sparse_map->propa_px_cur.push_back(pc);
+      // t_5 += omp_get_wtime() - t_1;
+    }
+  }
+  // double t3 = omp_get_wtime();
+  // cout<<"C. addSubSparseMap: "<<t3-t2<<endl;
+  // cout<<"depthcontinuous: C1 "<<t_2<<" C2 "<<t_3<<" C3 "<<t_4<<" C4
+  // "<<t_5<<endl;
+  printf("[ VIO ]: choose %d points from sub_sparse_map.\n",
+         int(sub_sparse_map->index.size()));
 }
 
-bool LidarSelector::align2D(
-    const cv::Mat& cur_img,
-    float* ref_patch_with_border,
-    float* ref_patch,
-    const int n_iter,
-    Vector2d& cur_px_estimate,
-    int index)
-{
+bool LidarSelector::align2D(const cv::Mat &cur_img,
+                            float *ref_patch_with_border, float *ref_patch,
+                            const int n_iter, Vector2d &cur_px_estimate,
+                            int index) {
 #ifdef __ARM_NEON__
-  if(!no_simd)
-    return align2D_NEON(cur_img, ref_patch_with_border, ref_patch, n_iter, cur_px_estimate);
+  if (!no_simd)
+    return align2D_NEON(cur_img, ref_patch_with_border, ref_patch, n_iter,
+                        cur_px_estimate);
 #endif
 
   const int halfpatch_size_ = 4;
   const int patch_size_ = 8;
   const int patch_area_ = 64;
-  bool converged=false;
+  bool converged = false;
 
   // compute derivative of template and prepare inverse compositional
   float __attribute__((__aligned__(16))) ref_patch_dx[patch_area_];
   float __attribute__((__aligned__(16))) ref_patch_dy[patch_area_];
-  Matrix3f H; H.setZero();
+  Matrix3f H;
+  H.setZero();
 
   // compute gradient and hessian
-  const int ref_step = patch_size_+2;
-  float* it_dx = ref_patch_dx;
-  float* it_dy = ref_patch_dy;
-  for(int y=0; y<patch_size_; ++y) 
-  {
-    float* it = ref_patch_with_border + (y+1)*ref_step + 1; 
-    for(int x=0; x<patch_size_; ++x, ++it, ++it_dx, ++it_dy)
-    {
+  const int ref_step = patch_size_ + 2;
+  float *it_dx = ref_patch_dx;
+  float *it_dy = ref_patch_dy;
+  for (int y = 0; y < patch_size_; ++y) {
+    float *it = ref_patch_with_border + (y + 1) * ref_step + 1;
+    for (int x = 0; x < patch_size_; ++x, ++it, ++it_dx, ++it_dy) {
       Vector3f J;
-      J[0] = 0.5 * (it[1] - it[-1]); 
-      J[1] = 0.5 * (it[ref_step] - it[-ref_step]); 
-      J[2] = 1; 
+      J[0] = 0.5 * (it[1] - it[-1]);
+      J[1] = 0.5 * (it[ref_step] - it[-ref_step]);
+      J[2] = 1;
       *it_dx = J[0];
       *it_dy = J[1];
-      H += J*J.transpose(); 
+      H += J * J.transpose();
     }
   }
   Matrix3f Hinv = H.inverse();
@@ -647,52 +700,57 @@ bool LidarSelector::align2D(
   float v = cur_px_estimate.y();
 
   // termination condition
-  const float min_update_squared = 0.03*0.03;//0.03*0.03
+  const float min_update_squared = 0.03 * 0.03; // 0.03*0.03
   const int cur_step = cur_img.step.p[0];
   float chi2 = 0;
   chi2 = sub_sparse_map->propa_errors[index];
-  Vector3f update; update.setZero();
-  for(int iter = 0; iter<n_iter; ++iter)
-  {
+  Vector3f update;
+  update.setZero();
+  for (int iter = 0; iter < n_iter; ++iter) {
     int u_r = floor(u);
     int v_r = floor(v);
-    if(u_r < halfpatch_size_ || v_r < halfpatch_size_ || u_r >= cur_img.cols-halfpatch_size_ || v_r >= cur_img.rows-halfpatch_size_)
+    if (u_r < halfpatch_size_ || v_r < halfpatch_size_ ||
+        u_r >= cur_img.cols - halfpatch_size_ ||
+        v_r >= cur_img.rows - halfpatch_size_)
       break;
 
-    if(isnan(u) || isnan(v)) // TODO very rarely this can happen, maybe H is singular? should not be at corner.. check
+    if (isnan(u) || isnan(v)) // TODO very rarely this can happen, maybe H is
+                              // singular? should not be at corner.. check
       return false;
 
     // compute interpolation weights
-    float subpix_x = u-u_r;
-    float subpix_y = v-v_r;
-    float wTL = (1.0-subpix_x)*(1.0-subpix_y);
-    float wTR = subpix_x * (1.0-subpix_y);
-    float wBL = (1.0-subpix_x)*subpix_y;
+    float subpix_x = u - u_r;
+    float subpix_y = v - v_r;
+    float wTL = (1.0 - subpix_x) * (1.0 - subpix_y);
+    float wTR = subpix_x * (1.0 - subpix_y);
+    float wBL = (1.0 - subpix_x) * subpix_y;
     float wBR = subpix_x * subpix_y;
 
     // loop through search_patch, interpolate
-    float* it_ref = ref_patch;
-    float* it_ref_dx = ref_patch_dx;
-    float* it_ref_dy = ref_patch_dy;
+    float *it_ref = ref_patch;
+    float *it_ref_dx = ref_patch_dx;
+    float *it_ref_dy = ref_patch_dy;
     float new_chi2 = 0.0;
-    Vector3f Jres; Jres.setZero();
-    for(int y=0; y<patch_size_; ++y)
-    {
-      uint8_t* it = (uint8_t*) cur_img.data + (v_r+y-halfpatch_size_)*cur_step + u_r-halfpatch_size_; 
-      for(int x=0; x<patch_size_; ++x, ++it, ++it_ref, ++it_ref_dx, ++it_ref_dy)
-      {
-        float search_pixel = wTL*it[0] + wTR*it[1] + wBL*it[cur_step] + wBR*it[cur_step+1];
+    Vector3f Jres;
+    Jres.setZero();
+    for (int y = 0; y < patch_size_; ++y) {
+      uint8_t *it = (uint8_t *)cur_img.data +
+                    (v_r + y - halfpatch_size_) * cur_step + u_r -
+                    halfpatch_size_;
+      for (int x = 0; x < patch_size_;
+           ++x, ++it, ++it_ref, ++it_ref_dx, ++it_ref_dy) {
+        float search_pixel = wTL * it[0] + wTR * it[1] + wBL * it[cur_step] +
+                             wBR * it[cur_step + 1];
         float res = search_pixel - *it_ref + mean_diff;
-        Jres[0] -= res*(*it_ref_dx);
-        Jres[1] -= res*(*it_ref_dy);
+        Jres[0] -= res * (*it_ref_dx);
+        Jres[1] -= res * (*it_ref_dy);
         Jres[2] -= res;
-        new_chi2 += res*res;
+        new_chi2 += res * res;
       }
     }
 
-    if(iter > 0 && new_chi2 > chi2)
-    {
-    //   cout << "error increased." << endl;
+    if (iter > 0 && new_chi2 > chi2) {
+      //   cout << "error increased." << endl;
       u -= update[0];
       v -= update[1];
       break;
@@ -708,17 +766,17 @@ bool LidarSelector::align2D(
 
 #if SUBPIX_VERBOSE
     cout << "Iter " << iter << ":"
-         << "\t u=" << u << ", v=" << v
-         << "\t update = " << update[0] << ", " << update[1]
+         << "\t u=" << u << ", v=" << v << "\t update = " << update[0] << ", "
+         << update[1]
 //         << "\t new chi2 = " << new_chi2 << endl;
 #endif
 
-    if(update[0]*update[0]+update[1]*update[1] < min_update_squared)
-    {
+        if (update[0] * update[0] + update[1] * update[1] <
+            min_update_squared) {
 #if SUBPIX_VERBOSE
       cout << "converged." << endl;
 #endif
-      converged=true;
+      converged = true;
       break;
     }
   }
@@ -727,366 +785,407 @@ bool LidarSelector::align2D(
   return converged;
 }
 
-void LidarSelector::FeatureAlignment(cv::Mat img)
-{
-    int total_points = sub_sparse_map->index.size();
-    if (total_points==0) return;
-    memset(align_flag, 0, length);
-    int FeatureAlignmentNum = 0;
-       
-    for (int i=0; i<total_points; i++) 
-    {
-        bool res;
-        int search_level = sub_sparse_map->search_levels[i];
-        Vector2d px_scaled(sub_sparse_map->px_cur[i]/(1<<search_level));
-        res = align2D(new_frame_->img_pyr_[search_level], sub_sparse_map->patch_with_border[i], sub_sparse_map->patch[i],
-                        20, px_scaled, i);
-        sub_sparse_map->px_cur[i] = px_scaled * (1<<search_level);
-        if(res)
-        {
-            align_flag[i] = 1;
-            FeatureAlignmentNum++;
-        }
+void LidarSelector::FeatureAlignment(cv::Mat img) {
+  int total_points = sub_sparse_map->index.size();
+  if (total_points == 0)
+    return;
+  memset(align_flag, 0, length);
+  int FeatureAlignmentNum = 0;
+
+  for (int i = 0; i < total_points; i++) {
+    bool res;
+    int search_level = sub_sparse_map->search_levels[i];
+    Vector2d px_scaled(sub_sparse_map->px_cur[i] / (1 << search_level));
+    res = align2D(new_frame_->img_pyr_[search_level],
+                  sub_sparse_map->patch_with_border[i],
+                  sub_sparse_map->patch[i], 20, px_scaled, i);
+    sub_sparse_map->px_cur[i] = px_scaled * (1 << search_level);
+    if (res) {
+      align_flag[i] = 1;
+      FeatureAlignmentNum++;
     }
+  }
 }
 
-float LidarSelector::UpdateState(cv::Mat img, float total_residual, int level) 
-{
-    int total_points = sub_sparse_map->index.size();
-    if (total_points==0) return 0.;
-    StatesGroup old_state = (*state);
-    V2D pc; 
-    MD(1,2) Jimg;
-    MD(2,3) Jdpi;
-    MD(1,3) Jdphi, Jdp, JdR, Jdt;
-    VectorXd z;
-    // VectorXd R;
-    bool EKF_end = false;
-    /* Compute J */
-    float error=0.0, last_error=total_residual, patch_error=0.0, last_patch_error=0.0, propa_error=0.0;
-    // MatrixXd H;
-    bool z_init = true;
-    const int H_DIM = total_points * patch_size_total;
-    
-    // K.resize(H_DIM, H_DIM);
-    z.resize(H_DIM);
-    z.setZero();
-    // R.resize(H_DIM);
-    // R.setZero();
+float LidarSelector::UpdateState(cv::Mat img, float total_residual, int level) {
+  int total_points = sub_sparse_map->index.size();
+  if (total_points == 0)
+    return 0.;
+  StatesGroup old_state = (*state);
+  V2D pc;
+  MD(1, 2) Jimg;
+  MD(2, 3) Jdpi;
+  MD(1, 3) Jdphi, Jdp, JdR, Jdt;
+  VectorXd z;
+  // VectorXd R;
+  bool EKF_end = false;
+  /* Compute J */
+  float error = 0.0, last_error = total_residual, patch_error = 0.0,
+        last_patch_error = 0.0, propa_error = 0.0;
+  // MatrixXd H;
+  bool z_init = true;
+  const int H_DIM = total_points * patch_size_total;
 
-    // H.resize(H_DIM, DIM_STATE);
-    // H.setZero();
-    H_sub.resize(H_DIM, 6);
-    H_sub.setZero();
-    
-    for (int iteration=0; iteration<NUM_MAX_ITERATIONS; iteration++) 
-    {
-        // double t1 = omp_get_wtime();
-        double count_outlier = 0;
-     
-        error = 0.0;
-        propa_error = 0.0;
-        n_meas_ =0;
-        M3D Rwi(state->rot_end);
-        V3D Pwi(state->pos_end);
-        Rcw = Rci * Rwi.transpose();
-        Pcw = -Rci*Rwi.transpose()*Pwi + Pci;
-        Jdp_dt = Rci * Rwi.transpose();
-        
-        M3D p_hat;
-        int i;
+  // K.resize(H_DIM, H_DIM);
+  z.resize(H_DIM);
+  z.setZero();
+  // R.resize(H_DIM);
+  // R.setZero();
 
-        for (i=0; i<sub_sparse_map->index.size(); i++) 
-        {
-            patch_error = 0.0;
-            int search_level = sub_sparse_map->search_levels[i];
-            int pyramid_level = level + search_level;
-            const int scale =  (1<<pyramid_level);
-            
-            PointPtr pt = sub_sparse_map->voxel_points[i];
+  // H.resize(H_DIM, DIM_STATE);
+  // H.setZero();
+  H_sub.resize(H_DIM, 6);
+  H_sub.setZero();
 
-            if(pt==nullptr) continue;
+  for (int iteration = 0; iteration < NUM_MAX_ITERATIONS; iteration++) {
+    // double t1 = omp_get_wtime();
+    double count_outlier = 0;
 
-            V3D pf = Rcw * pt->pos_ + Pcw;
-            pc = cam->world2cam(pf);
-            // if((level==2 && iteration==0) || (level==1 && iteration==0) || level==0)
-            {
-                dpi(pf, Jdpi);
-                p_hat << SKEW_SYM_MATRX(pf);
-            }
-            const float u_ref = pc[0];
-            const float v_ref = pc[1];
-            const int u_ref_i = floorf(pc[0]/scale)*scale; 
-            const int v_ref_i = floorf(pc[1]/scale)*scale;
-            const float subpix_u_ref = (u_ref-u_ref_i)/scale;
-            const float subpix_v_ref = (v_ref-v_ref_i)/scale;
-            const float w_ref_tl = (1.0-subpix_u_ref) * (1.0-subpix_v_ref);
-            const float w_ref_tr = subpix_u_ref * (1.0-subpix_v_ref);
-            const float w_ref_bl = (1.0-subpix_u_ref) * subpix_v_ref;
-            const float w_ref_br = subpix_u_ref * subpix_v_ref;
-            
-            float* P = sub_sparse_map->patch[i];
-            for (int x=0; x<patch_size; x++) 
-            {
-                uint8_t* img_ptr = (uint8_t*) img.data + (v_ref_i+x*scale-patch_size_half*scale)*width + u_ref_i-patch_size_half*scale;
-                for (int y=0; y<patch_size; ++y, img_ptr+=scale) 
-                {
-                    // if((level==2 && iteration==0) || (level==1 && iteration==0) || level==0)
-                    //{
-                    float du = 0.5f * ((w_ref_tl*img_ptr[scale] + w_ref_tr*img_ptr[scale*2] + w_ref_bl*img_ptr[scale*width+scale] + w_ref_br*img_ptr[scale*width+scale*2])
-                                -(w_ref_tl*img_ptr[-scale] + w_ref_tr*img_ptr[0] + w_ref_bl*img_ptr[scale*width-scale] + w_ref_br*img_ptr[scale*width]));
-                    float dv = 0.5f * ((w_ref_tl*img_ptr[scale*width] + w_ref_tr*img_ptr[scale+scale*width] + w_ref_bl*img_ptr[width*scale*2] + w_ref_br*img_ptr[width*scale*2+scale])
-                                -(w_ref_tl*img_ptr[-scale*width] + w_ref_tr*img_ptr[-scale*width+scale] + w_ref_bl*img_ptr[0] + w_ref_br*img_ptr[scale]));
-                    Jimg << du, dv;
-                    Jimg = Jimg * (1.0/scale);
-                    Jdphi = Jimg * Jdpi * p_hat;
-                    Jdp = -Jimg * Jdpi;
-                    JdR = Jdphi * Jdphi_dR + Jdp * Jdp_dR;
-                    Jdt = Jdp * Jdp_dt;
-                    //}
-                    double res = w_ref_tl*img_ptr[0] + w_ref_tr*img_ptr[scale] + w_ref_bl*img_ptr[scale*width] + w_ref_br*img_ptr[scale*width+scale]  - P[patch_size_total*level + x*patch_size+y];
-                    z(i*patch_size_total+x*patch_size+y) = res;
-                    // float weight = 1.0;
-                    // if(iteration > 0)
-                    //     weight = weight_function_->value(res/weight_scale_); 
-                    // R(i*patch_size_total+x*patch_size+y) = weight;       
-                    patch_error +=  res*res;
-                    n_meas_++;
-                    // H.block<1,6>(i*patch_size_total+x*patch_size+y,0) << JdR*weight, Jdt*weight;
-                    // if((level==2 && iteration==0) || (level==1 && iteration==0) || level==0)
-                    H_sub.block<1,6>(i*patch_size_total+x*patch_size+y,0) << JdR, Jdt;
-                }
-            }  
-
-            sub_sparse_map->errors[i] = patch_error;
-            error += patch_error;
-        }
-
-        // computeH += omp_get_wtime() - t1;
-
-        error = error/n_meas_;
-
-        // double t3 = omp_get_wtime();
-
-        if (error <= last_error) 
-        {
-            old_state = (*state);
-            last_error = error;
-
-            // K = (H.transpose() / img_point_cov * H + state->cov.inverse()).inverse() * H.transpose() / img_point_cov;
-            // auto vec = (*state_propagat) - (*state);
-            // G = K*H;
-            // (*state) += (-K*z + vec - G*vec);
-
-            auto &&H_sub_T = H_sub.transpose();
-            H_T_H.block<6,6>(0,0) = H_sub_T * H_sub;
-            MD(DIM_STATE, DIM_STATE) &&K_1 = (H_T_H + (state->cov / img_point_cov).inverse()).inverse();
-            auto &&HTz = H_sub_T * z;
-            // K = K_1.block<DIM_STATE,6>(0,0) * H_sub_T;
-            auto vec = (*state_propagat) - (*state);
-            G.block<DIM_STATE,6>(0,0) = K_1.block<DIM_STATE,6>(0,0) * H_T_H.block<6,6>(0,0);
-            auto solution = - K_1.block<DIM_STATE,6>(0,0) * HTz + vec - G.block<DIM_STATE,6>(0,0) * vec.block<6,1>(0,0);
-            (*state) += solution;
-            auto &&rot_add = solution.block<3,1>(0,0);
-            auto &&t_add   = solution.block<3,1>(3,0);
-
-            if ((rot_add.norm() * 57.3f < 0.001f) && (t_add.norm() * 100.0f < 0.001f))
-            {
-                EKF_end = true;
-            }
-        }
-        else
-        {
-            (*state) = old_state;
-            EKF_end = true;
-        }
-
-        // ekf_time += omp_get_wtime() - t3;
-
-        if (iteration==NUM_MAX_ITERATIONS || EKF_end) 
-        {
-            break;
-        }
-    }
-    return last_error;
-} 
-
-void LidarSelector::updateFrameState(StatesGroup state)
-{
-    M3D Rwi(state.rot_end);
-    V3D Pwi(state.pos_end);
+    error = 0.0;
+    propa_error = 0.0;
+    n_meas_ = 0;
+    M3D Rwi(state->rot_end);
+    V3D Pwi(state->pos_end);
     Rcw = Rci * Rwi.transpose();
-    Pcw = -Rci*Rwi.transpose()*Pwi + Pci;
-    new_frame_->T_f_w_ = SE3(Rcw, Pcw);
-}
+    Pcw = -Rci * Rwi.transpose() * Pwi + Pci;
+    Jdp_dt = Rci * Rwi.transpose();
 
-void LidarSelector::addObservation(cv::Mat img)
-{
-    int total_points = sub_sparse_map->index.size();
-    if (total_points==0) return;
+    M3D p_hat;
+    int i;
 
-    for (int i=0; i<total_points; i++) 
-    {
-        PointPtr pt = sub_sparse_map->voxel_points[i];
-        if(pt==nullptr) continue;
-        V2D pc(new_frame_->w2c(pt->pos_));
-        SE3 pose_cur = new_frame_->T_f_w_;
-        bool add_flag = false;
-        // if (sub_sparse_map->errors[i]<= 100*patch_size_total && sub_sparse_map->errors[i]>0) //&& align_flag[i]==1) 
-        {
-            float* patch_temp = new float[patch_size_total*3];
-            getpatch(img, pc, patch_temp, 0);
-            getpatch(img, pc, patch_temp, 1);
-            getpatch(img, pc, patch_temp, 2);
+    for (i = 0; i < sub_sparse_map->index.size(); i++) {
+      patch_error = 0.0;
+      int search_level = sub_sparse_map->search_levels[i];
+      int pyramid_level = level + search_level;
+      const int scale = (1 << pyramid_level);
 
-            //TODO: condition: distance and view_angle 
-            // Step 1: time
-            FeaturePtr last_feature =  pt->obs_.back();
-            // if(new_frame_->id_ >= last_feature->id_ + 20) add_flag = true;
+      PointPtr pt = sub_sparse_map->voxel_points[i];
 
-            // Step 2: delta_pose
-            SE3 pose_ref = last_feature->T_f_w_;
-            SE3 delta_pose = pose_ref * pose_cur.inverse();
-            double delta_p = delta_pose.translation().norm();
-            double delta_theta = (delta_pose.rotation_matrix().trace() > 3.0 - 1e-6) ? 0.0 : std::acos(0.5 * (delta_pose.rotation_matrix().trace() - 1));            
-            if(delta_p > 0.5 || delta_theta > 10) add_flag = true;
+      if (pt == nullptr)
+        continue;
 
-            // Step 3: pixel distance
-            Vector2d last_px = last_feature->px;
-            double pixel_dist = (pc-last_px).norm();
-            if(pixel_dist > 40) add_flag = true;
-            
-            // Maintain the size of 3D Point observation features.
-            if(pt->obs_.size()>=20)
-            {
-                FeaturePtr ref_ftr;
-                pt->getFurthestViewObs(new_frame_->pos(), ref_ftr);
-                pt->deleteFeatureRef(ref_ftr);
-                // ROS_WARN("ref_ftr->id_ is %d", ref_ftr->id_);
-            } 
-            if(add_flag)
-            {
-                pt->value = vk::shiTomasiScore(img, pc[0], pc[1]);
-                Vector3d f = cam->cam2world(pc);
-                FeaturePtr ftr_new(new Feature(patch_temp, pc, f, new_frame_->T_f_w_, pt->value, sub_sparse_map->search_levels[i])); 
-                ftr_new->img = new_frame_->img_pyr_[0];
-                ftr_new->id_ = new_frame_->id_;
-                // ftr_new->ImgPyr.resize(5);
-                // for(int i=0;i<5;i++) ftr_new->ImgPyr[i] = new_frame_->img_pyr_[i];
-                pt->addFrameRef(ftr_new);      
-            }
+      V3D pf = Rcw * pt->pos_ + Pcw;
+      pc = cam->world2cam(pf);
+      // if((level==2 && iteration==0) || (level==1 && iteration==0) ||
+      // level==0)
+      {
+        dpi(pf, Jdpi);
+        p_hat << SKEW_SYM_MATRX(pf);
+      }
+      const float u_ref = pc[0];
+      const float v_ref = pc[1];
+      const int u_ref_i = floorf(pc[0] / scale) * scale;
+      const int v_ref_i = floorf(pc[1] / scale) * scale;
+      const float subpix_u_ref = (u_ref - u_ref_i) / scale;
+      const float subpix_v_ref = (v_ref - v_ref_i) / scale;
+      const float w_ref_tl = (1.0 - subpix_u_ref) * (1.0 - subpix_v_ref);
+      const float w_ref_tr = subpix_u_ref * (1.0 - subpix_v_ref);
+      const float w_ref_bl = (1.0 - subpix_u_ref) * subpix_v_ref;
+      const float w_ref_br = subpix_u_ref * subpix_v_ref;
+
+      float *P = sub_sparse_map->patch[i];
+      for (int x = 0; x < patch_size; x++) {
+        uint8_t *img_ptr =
+            (uint8_t *)img.data +
+            (v_ref_i + x * scale - patch_size_half * scale) * width + u_ref_i -
+            patch_size_half * scale;
+        for (int y = 0; y < patch_size; ++y, img_ptr += scale) {
+          // if((level==2 && iteration==0) || (level==1 && iteration==0) ||
+          // level==0)
+          //{
+          float du =
+              0.5f *
+              ((w_ref_tl * img_ptr[scale] + w_ref_tr * img_ptr[scale * 2] +
+                w_ref_bl * img_ptr[scale * width + scale] +
+                w_ref_br * img_ptr[scale * width + scale * 2]) -
+               (w_ref_tl * img_ptr[-scale] + w_ref_tr * img_ptr[0] +
+                w_ref_bl * img_ptr[scale * width - scale] +
+                w_ref_br * img_ptr[scale * width]));
+          float dv =
+              0.5f * ((w_ref_tl * img_ptr[scale * width] +
+                       w_ref_tr * img_ptr[scale + scale * width] +
+                       w_ref_bl * img_ptr[width * scale * 2] +
+                       w_ref_br * img_ptr[width * scale * 2 + scale]) -
+                      (w_ref_tl * img_ptr[-scale * width] +
+                       w_ref_tr * img_ptr[-scale * width + scale] +
+                       w_ref_bl * img_ptr[0] + w_ref_br * img_ptr[scale]));
+          Jimg << du, dv;
+          Jimg = Jimg * (1.0 / scale);
+          Jdphi = Jimg * Jdpi * p_hat;
+          Jdp = -Jimg * Jdpi;
+          JdR = Jdphi * Jdphi_dR + Jdp * Jdp_dR;
+          Jdt = Jdp * Jdp_dt;
+          //}
+          double res = w_ref_tl * img_ptr[0] + w_ref_tr * img_ptr[scale] +
+                       w_ref_bl * img_ptr[scale * width] +
+                       w_ref_br * img_ptr[scale * width + scale] -
+                       P[patch_size_total * level + x * patch_size + y];
+          z(i * patch_size_total + x * patch_size + y) = res;
+          // float weight = 1.0;
+          // if(iteration > 0)
+          //     weight = weight_function_->value(res/weight_scale_);
+          // R(i*patch_size_total+x*patch_size+y) = weight;
+          patch_error += res * res;
+          n_meas_++;
+          // H.block<1,6>(i*patch_size_total+x*patch_size+y,0) << JdR*weight,
+          // Jdt*weight; if((level==2 && iteration==0) || (level==1 &&
+          // iteration==0) || level==0)
+          H_sub.block<1, 6>(i * patch_size_total + x * patch_size + y, 0)
+              << JdR,
+              Jdt;
         }
+      }
+
+      sub_sparse_map->errors[i] = patch_error;
+      error += patch_error;
     }
+
+    // computeH += omp_get_wtime() - t1;
+
+    error = error / n_meas_;
+
+    // double t3 = omp_get_wtime();
+
+    if (error <= last_error) {
+      old_state = (*state);
+      last_error = error;
+
+      // K = (H.transpose() / img_point_cov * H +
+      // state->cov.inverse()).inverse() * H.transpose() / img_point_cov; auto
+      // vec = (*state_propagat) - (*state); G = K*H;
+      // (*state) += (-K*z + vec - G*vec);
+
+      auto &&H_sub_T = H_sub.transpose();
+      H_T_H.block<6, 6>(0, 0) = H_sub_T * H_sub;
+      MD(DIM_STATE, DIM_STATE) &&K_1 =
+          (H_T_H + (state->cov / img_point_cov).inverse()).inverse();
+      auto &&HTz = H_sub_T * z;
+      // K = K_1.block<DIM_STATE,6>(0,0) * H_sub_T;
+      auto vec = (*state_propagat) - (*state);
+      G.block<DIM_STATE, 6>(0, 0) =
+          K_1.block<DIM_STATE, 6>(0, 0) * H_T_H.block<6, 6>(0, 0);
+      auto solution = -K_1.block<DIM_STATE, 6>(0, 0) * HTz + vec -
+                      G.block<DIM_STATE, 6>(0, 0) * vec.block<6, 1>(0, 0);
+      (*state) += solution;
+      auto &&rot_add = solution.block<3, 1>(0, 0);
+      auto &&t_add = solution.block<3, 1>(3, 0);
+
+      if ((rot_add.norm() * 57.3f < 0.001f) &&
+          (t_add.norm() * 100.0f < 0.001f)) {
+        EKF_end = true;
+      }
+    } else {
+      (*state) = old_state;
+      EKF_end = true;
+    }
+
+    // ekf_time += omp_get_wtime() - t3;
+
+    if (iteration == NUM_MAX_ITERATIONS || EKF_end) {
+      break;
+    }
+  }
+  return last_error;
 }
 
-void LidarSelector::ComputeJ(cv::Mat img) 
-{
-    int total_points = sub_sparse_map->index.size();
-    if (total_points==0) return;
-    float error = 1e10;
-    float now_error = error;
-
-    for (int level=2; level>=0; level--) 
-    {
-        now_error = UpdateState(img, error, level);
-    }
-    if (now_error < error)
-    {
-        state->cov -= G*state->cov;
-    }
-    updateFrameState(*state);
+// 使用StatesGroup类型变量state更新此时的最新帧位姿new_frame_
+void LidarSelector::updateFrameState(StatesGroup state) {
+  M3D Rwi(state.rot_end);
+  V3D Pwi(state.pos_end);
+  Rcw = Rci * Rwi.transpose();
+  Pcw = -Rci * Rwi.transpose() * Pwi + Pci;
+  new_frame_->T_f_w_ = SE3(Rcw, Pcw);
 }
 
-void LidarSelector::display_keypatch(double time)
-{
-    int total_points = sub_sparse_map->index.size();
-    if (total_points==0) return;
-    for(int i=0; i<total_points; i++)
+void LidarSelector::addObservation(cv::Mat img) {
+  int total_points = sub_sparse_map->index.size();
+  if (total_points == 0)
+    return;
+
+  for (int i = 0; i < total_points; i++) {
+    PointPtr pt = sub_sparse_map->voxel_points[i];
+    if (pt == nullptr)
+      continue;
+    V2D pc(new_frame_->w2c(pt->pos_));
+    SE3 pose_cur = new_frame_->T_f_w_;
+    bool add_flag = false;
+    // if (sub_sparse_map->errors[i]<= 100*patch_size_total &&
+    // sub_sparse_map->errors[i]>0) //&& align_flag[i]==1)
     {
-        PointPtr pt = sub_sparse_map->voxel_points[i];
-        V2D pc(new_frame_->w2c(pt->pos_));
-        cv::Point2f pf;
-        pf = cv::Point2f(pc[0], pc[1]); 
-        if (sub_sparse_map->errors[i]<8000) // 5.5
-            cv::circle(img_cp, pf, 4, cv::Scalar(0, 255, 0), -1, 8); // Green Sparse Align tracked
-        else
-            cv::circle(img_cp, pf, 4, cv::Scalar(255, 0, 0), -1, 8); // Blue Sparse Align tracked
-    }   
-    std::string text = std::to_string(int(1/time))+" HZ";
-    cv::Point2f origin;
-    origin.x = 20;
-    origin.y = 20;
-    cv::putText(img_cp, text, origin, cv::FONT_HERSHEY_COMPLEX, 0.6, cv::Scalar(255, 255, 255), 1, 8, 0);
+      float *patch_temp = new float[patch_size_total * 3];
+      getpatch(img, pc, patch_temp, 0);
+      getpatch(img, pc, patch_temp, 1);
+      getpatch(img, pc, patch_temp, 2);
+
+      // TODO: condition: distance and view_angle
+      // Step 1: time
+      FeaturePtr last_feature = pt->obs_.back();
+      // if(new_frame_->id_ >= last_feature->id_ + 20) add_flag = true;
+
+      // Step 2: delta_pose
+      SE3 pose_ref = last_feature->T_f_w_;
+      SE3 delta_pose = pose_ref * pose_cur.inverse();
+      double delta_p = delta_pose.translation().norm();
+      double delta_theta =
+          (delta_pose.rotation_matrix().trace() > 3.0 - 1e-6)
+              ? 0.0
+              : std::acos(0.5 * (delta_pose.rotation_matrix().trace() - 1));
+      if (delta_p > 0.5 || delta_theta > 10)
+        add_flag = true;
+
+      // Step 3: pixel distance
+      Vector2d last_px = last_feature->px;
+      double pixel_dist = (pc - last_px).norm();
+      if (pixel_dist > 40)
+        add_flag = true;
+
+      // Maintain the size of 3D Point observation features.
+      if (pt->obs_.size() >= 20) {
+        FeaturePtr ref_ftr;
+        pt->getFurthestViewObs(new_frame_->pos(), ref_ftr);
+        pt->deleteFeatureRef(ref_ftr);
+        // ROS_WARN("ref_ftr->id_ is %d", ref_ftr->id_);
+      }
+      if (add_flag) {
+        pt->value = vk::shiTomasiScore(img, pc[0], pc[1]);
+        Vector3d f = cam->cam2world(pc);
+        FeaturePtr ftr_new(new Feature(patch_temp, pc, f, new_frame_->T_f_w_,
+                                       pt->value,
+                                       sub_sparse_map->search_levels[i]));
+        ftr_new->img = new_frame_->img_pyr_[0];
+        ftr_new->id_ = new_frame_->id_;
+        // ftr_new->ImgPyr.resize(5);
+        // for(int i=0;i<5;i++) ftr_new->ImgPyr[i] = new_frame_->img_pyr_[i];
+        pt->addFrameRef(ftr_new);
+      }
+    }
+  }
 }
 
-V3F LidarSelector::getpixel(cv::Mat img, V2D pc) 
-{
-    const float u_ref = pc[0];
-    const float v_ref = pc[1];
-    const int u_ref_i = floorf(pc[0]); 
-    const int v_ref_i = floorf(pc[1]);
-    const float subpix_u_ref = (u_ref-u_ref_i);
-    const float subpix_v_ref = (v_ref-v_ref_i);
-    const float w_ref_tl = (1.0-subpix_u_ref) * (1.0-subpix_v_ref);
-    const float w_ref_tr = subpix_u_ref * (1.0-subpix_v_ref);
-    const float w_ref_bl = (1.0-subpix_u_ref) * subpix_v_ref;
-    const float w_ref_br = subpix_u_ref * subpix_v_ref;
-    uint8_t* img_ptr = (uint8_t*) img.data + ((v_ref_i)*width + (u_ref_i))*3;
-    float B = w_ref_tl*img_ptr[0] + w_ref_tr*img_ptr[0+3] + w_ref_bl*img_ptr[width*3] + w_ref_br*img_ptr[width*3+0+3];
-    float G = w_ref_tl*img_ptr[1] + w_ref_tr*img_ptr[1+3] + w_ref_bl*img_ptr[1+width*3] + w_ref_br*img_ptr[width*3+1+3];
-    float R = w_ref_tl*img_ptr[2] + w_ref_tr*img_ptr[2+3] + w_ref_bl*img_ptr[2+width*3] + w_ref_br*img_ptr[width*3+2+3];
-    V3F pixel(B,G,R);
-    return pixel;
+void LidarSelector::ComputeJ(cv::Mat img) {
+  int total_points = sub_sparse_map->index.size();
+  if (total_points == 0)
+    return;
+  float error = 1e10;
+  float now_error = error;
+
+  for (int level = 2; level >= 0; level--) {
+    now_error = UpdateState(img, error, level);
+  }
+  if (now_error < error) {
+    state->cov -= G * state->cov;
+  }
+  updateFrameState(*state);
 }
 
-void LidarSelector::detect(cv::Mat img, PointCloudXYZI::Ptr pg) 
-{
-    if(width!=img.cols || height!=img.rows)
-    {
-        // std::cout<<"Resize the img scale !!!"<<std::endl;
-        double scale = 0.5;
-        cv::resize(img,img,cv::Size(img.cols*scale,img.rows*scale),0,0,CV_INTER_LINEAR);
-    }
-    img_rgb = img.clone();
-    img_cp = img.clone();
-    cv::cvtColor(img,img,CV_BGR2GRAY);
+void LidarSelector::display_keypatch(double time) {
+  int total_points = sub_sparse_map->index.size();
+  if (total_points == 0)
+    return;
+  for (int i = 0; i < total_points; i++) {
+    PointPtr pt = sub_sparse_map->voxel_points[i];
+    V2D pc(new_frame_->w2c(pt->pos_));
+    cv::Point2f pf;
+    pf = cv::Point2f(pc[0], pc[1]);
+    if (sub_sparse_map->errors[i] < 8000) // 5.5
+      cv::circle(img_cp, pf, 4, cv::Scalar(0, 255, 0), -1,
+                 8); // Green Sparse Align tracked
+    else
+      cv::circle(img_cp, pf, 4, cv::Scalar(255, 0, 0), -1,
+                 8); // Blue Sparse Align tracked
+  }
+  std::string text = std::to_string(int(1 / time)) + " HZ";
+  cv::Point2f origin;
+  origin.x = 20;
+  origin.y = 20;
+  cv::putText(img_cp, text, origin, cv::FONT_HERSHEY_COMPLEX, 0.6,
+              cv::Scalar(255, 255, 255), 1, 8, 0);
+}
 
-    new_frame_.reset(new Frame(cam, img.clone()));
-    updateFrameState(*state);
+V3F LidarSelector::getpixel(cv::Mat img, V2D pc) {
+  const float u_ref = pc[0];
+  const float v_ref = pc[1];
+  const int u_ref_i = floorf(pc[0]);
+  const int v_ref_i = floorf(pc[1]);
+  const float subpix_u_ref = (u_ref - u_ref_i);
+  const float subpix_v_ref = (v_ref - v_ref_i);
+  const float w_ref_tl = (1.0 - subpix_u_ref) * (1.0 - subpix_v_ref);
+  const float w_ref_tr = subpix_u_ref * (1.0 - subpix_v_ref);
+  const float w_ref_bl = (1.0 - subpix_u_ref) * subpix_v_ref;
+  const float w_ref_br = subpix_u_ref * subpix_v_ref;
+  uint8_t *img_ptr = (uint8_t *)img.data + ((v_ref_i)*width + (u_ref_i)) * 3;
+  float B = w_ref_tl * img_ptr[0] + w_ref_tr * img_ptr[0 + 3] +
+            w_ref_bl * img_ptr[width * 3] +
+            w_ref_br * img_ptr[width * 3 + 0 + 3];
+  float G = w_ref_tl * img_ptr[1] + w_ref_tr * img_ptr[1 + 3] +
+            w_ref_bl * img_ptr[1 + width * 3] +
+            w_ref_br * img_ptr[width * 3 + 1 + 3];
+  float R = w_ref_tl * img_ptr[2] + w_ref_tr * img_ptr[2 + 3] +
+            w_ref_bl * img_ptr[2 + width * 3] +
+            w_ref_br * img_ptr[width * 3 + 2 + 3];
+  V3F pixel(B, G, R);
+  return pixel;
+}
 
-    if(stage_ == STAGE_FIRST_FRAME && pg->size()>10)
-    {
-        new_frame_->setKeyframe();
-        stage_ = STAGE_DEFAULT_FRAME;
-    }
+void LidarSelector::detect(cv::Mat img, PointCloudXYZI::Ptr pg) {
+  std::cout << "start LidarSelector detect()" << std::endl;
+  if (width != img.cols || height != img.rows) {
+    // std::cout << "Resize the img scale !!!" << std::endl;
+    double scale = 0.5;
+    cv::resize(img, img, cv::Size(img.cols * scale, img.rows * scale), 0, 0,
+               CV_INTER_LINEAR);
+  }
+  img_rgb = img.clone();
+  img_cp = img.clone();
+  cv::cvtColor(img, img, CV_BGR2GRAY);
 
-    double t1 = omp_get_wtime();
+  // 如果时间戳没有完全对齐，还需要在传播到相机时间戳
+  // Step 1: 构造一个图像帧
+  new_frame_.reset(new Frame(cam, img.clone()));
+  updateFrameState(*state);
 
-    addFromSparseMap(img, pg);
+  if (stage_ == STAGE_FIRST_FRAME && pg->size() > 10) {
+    new_frame_->setKeyframe();
+    stage_ = STAGE_DEFAULT_FRAME;
+  }
 
-    double t3 = omp_get_wtime();
+  double t1 = omp_get_wtime();
 
-    addSparseMap(img, pg);
+  // Step 2:
+  // 计算这个图像帧观测到的地图点的patch，结果会存到成员变量的sub_sparse_map里面。
+  std::cout << "start addFromSparseMap" << std::endl;
+  addFromSparseMap(img, pg);
+  std::cout << "finish addFromSparseMap" << std::endl;
 
-    double t4 = omp_get_wtime();
-    
-    // computeH = ekf_time = 0.0;
-    
-    ComputeJ(img);
+  double t3 = omp_get_wtime();
 
-    double t5 = omp_get_wtime();
+  // Step 3: 这里属于论文最后一步，也就是优化之后添加新的地图点到视觉地图中。
+  std::cout << "start addSparseMap" << std::endl;
+  addSparseMap(img, pg);
+  std::cout << "finish addSparseMap" << std::endl;
 
-    addObservation(img);
-    
-    double t2 = omp_get_wtime();
-    
-    frame_cont ++;
-    ave_total = ave_total * (frame_cont - 1) / frame_cont + (t2 - t1) / frame_cont;
+  double t4 = omp_get_wtime();
 
-    printf("[ VIO ]: time: addFromSparseMap: %0.6f addSparseMap: %0.6f ComputeJ: %0.6f addObservation: %0.6f total time: %0.6f ave_total: %0.6f.\n"
-    , t3-t1, t4-t3, t5-t4, t2-t5, t2-t1);
+  // computeH = ekf_time = 0.0;
+  // Step 4:
+  // 使用视觉直接对齐，对状态进行优化，内容并不难，可以参照十四讲直接法的章节
+  ComputeJ(img);
 
-    display_keypatch(t2-t1);
-} 
+  double t5 = omp_get_wtime();
+
+  addObservation(img);
+
+  double t2 = omp_get_wtime();
+
+  frame_cont++;
+  ave_total =
+      ave_total * (frame_cont - 1) / frame_cont + (t2 - t1) / frame_cont;
+
+  printf("[ VIO ]: time: addFromSparseMap: %0.6f addSparseMap: %0.6f ComputeJ: "
+         "%0.6f addObservation: %0.6f total time: %0.6f ave_total: %0.6f.\n",
+         t3 - t1, t4 - t3, t5 - t4, t2 - t5, t2 - t1);
+
+  display_keypatch(t2 - t1);
+}
 
 } // namespace lidar_selection
