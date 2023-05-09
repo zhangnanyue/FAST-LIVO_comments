@@ -107,10 +107,11 @@ public:
   PointCloudXYZI::Ptr Map_points_output;
   PointCloudXYZI::Ptr pg_down;
   pcl::VoxelGrid<PointType> downSizeFilter;
-  // 这个feat_map就是整个视觉全局体素地图，通过hash_key索引对应的体素
+  // 视觉全局体素地图，通过hash_key索引对应的体素
   unordered_map<VOXEL_KEY, VOXEL_POINTS *> feat_map;
-  // 当前帧图像用到的子体素地图，每次都会重新构造
-  unordered_map<VOXEL_KEY, float> sub_feat_map; // timestamp
+  // 当前帧图像用到的子体素地图，每次都会重新构造，value表示深度
+  unordered_map<VOXEL_KEY, float> sub_feat_map;
+  // timestamp
   // reference frame id, A_cur_ref and search_level
   // 当前帧图像找到的地图点patch所在图像id，和这个图像跟当前帧图像之间的affine变换，每次都会重新构造
   unordered_map<int, Warp *> Warp_map;

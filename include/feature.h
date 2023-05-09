@@ -32,7 +32,7 @@ struct Feature
     CORNER,
     EDGELET
   };
-  int id_;
+  int id_;              //!当前帧的id
   FeatureType type;     //!< Type can be corner or edgelet.
   Frame* frame;         //!< Pointer to frame in which the feature was detected.
   cv::Mat img;
