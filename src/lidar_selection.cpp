@@ -156,6 +156,7 @@ void LidarSelector::getpatch(cv::Mat img, V2D pc, float *patch_tmp, int level) {
 //  3.6.point点的value更新至最新的shiTomasiScore分数
 //  3.7.调用void LidarSelector::AddPoint(PointPtr
 //  pt_new）将新的Point点加入feat_map全局体素地图中
+// 
 void LidarSelector::addSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg) {
   // double t0 = omp_get_wtime();
   reset_grid();
