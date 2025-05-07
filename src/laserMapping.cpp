@@ -1463,7 +1463,12 @@ int main(int argc, char **argv) {
         flg_EKF_converged = false;
 
         /*** Iterative Kalman Filter Update ***/
+        std::cout << "-------------------------flg_EKF_inited: "
+                  << flg_EKF_inited << std::endl;
+
         if (!flg_EKF_inited) {
+          std::cout << "-------------------------flg_EKF_inited: "
+                    << flg_EKF_inited << "-------------------"<< std::endl;
           cout << "||||||||||Initiallizing LiDar||||||||||" << endl;
           /*** only run in initialization period ***/
           MatrixXd H_init(MD(9, DIM_STATE)::Zero());

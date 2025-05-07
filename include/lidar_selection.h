@@ -63,6 +63,9 @@ public:
 
   ~LidarSelector();
 
+  void WritePatch(float *patch_tmp, const int &level,
+                  const std::string &patch_filename);
+
   void detect(cv::Mat img, PointCloudXYZI::Ptr pg);
   float CheckGoodPoints(cv::Mat img, V2D uv);
   void addFromSparseMap(cv::Mat img, PointCloudXYZI::Ptr pg);

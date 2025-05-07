@@ -207,10 +207,10 @@ void ImuProcess::Forward(const MeasureGroup &meas, StatesGroup &state_inout,
     cov_w.block<3, 3>(0, 0).diagonal() = cov_gyr * dt * dt;
     cov_w.block<3, 3>(6, 6) =
         R_imu * cov_acc.asDiagonal() * R_imu.transpose() * dt * dt;
-    cov_w.block<3, 3>(9, 9).diagonal() =
-        cov_bias_gyr * dt * dt; // bias gyro covariance
-    cov_w.block<3, 3>(12, 12).diagonal() =
-        cov_bias_acc * dt * dt; // bias acc covariance
+    // bias gyro covariance
+    cov_w.block<3, 3>(9, 9).diagonal() = cov_bias_gyr * dt * dt;
+    // bias acc covariance
+    cov_w.block<3, 3>(12, 12).diagonal() = cov_bias_acc * dt * dt;
 
     state_inout.cov = F_x * state_inout.cov * F_x.transpose() + cov_w;
 
@@ -661,6 +661,6 @@ void ImuProcess::Process2(LidarMeasureGroup &lidar_meas, StatesGroup &stat,
 
     return;
   }
-  
+
   UndistortPcl(lidar_meas, stat, *cur_pcl_un_);
 }
